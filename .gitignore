@@ -1,0 +1,8 @@
+# OS
+.DS_Store
+Thumbs.db
+target/
+*.sqlite
+node_modules/
+
+.env
