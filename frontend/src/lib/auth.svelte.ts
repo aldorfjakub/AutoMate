@@ -60,7 +60,7 @@ export function checkAuth(): Promise<void> {
 
 export async function logout() {
 	try {
-		await fetch(`${API_BASE}/api/user/logout`, { method: "POST", credentials: "include" });
+		await fetch(`${API_BASE}/api/auth/logout`, { method: "POST", credentials: "include" });
 	} catch {
 		// Ignore server failure; always clear local state.
 	}

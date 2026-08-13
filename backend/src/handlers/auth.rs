@@ -1,19 +1,21 @@
-use std::sync::Arc;
-
-use axum::{
-    Json, Router,
-    extract::State,
-    response::{IntoResponse, Redirect},
-    routing::{get, post},
-};
-use axum_extra::extract::{CookieJar, cookie::Cookie};
-use uuid::Uuid;
+use std::{str::FromStr, sync::Arc};
 
 use crate::models::dto::*;
 use crate::{
     error::{AppError, AppResult},
     state::AppState,
 };
+use axum::{
+    Json, Router,
+    extract::State,
+    response::{IntoResponse, Redirect},
+    routing::{get, post},
+};
+use axum_extra::extract::{
+    CookieJar,
+    cookie::{Cookie, SameSite},
+};
+use uuid::Uuid;
 
 const OAUTH_PROVIDER: &str = "github";
 const OAUTH_SCOPE: &str = "read%3Auser";
@@ -150,8 +152,30 @@ async fn oauth_callback(
     Ok((jar.add(cookie), Redirect::to("/")))
 }
 
+async fn logout(
+    jar: CookieJar,
+    State(state): State<Arc<AppState>>,
+) -> AppResult<(CookieJar, Redirect)> {
+    let session_id = jar.get("session_id").ok_or(AppError::Unauthorized)?.value();
+    let id_bytes = Uuid::from_str(session_id)
+        .map_err(|_| AppError::BadRequest("invalid session_id"))?
+        .as_bytes()
+        .to_vec();
+
+    let _ = sqlx::query!("DELETE FROM sessions WHERE id = ?", id_bytes)
+        .execute(&state.sqlite_pool)
+        .await?;
+    let removal = Cookie::build("session_id")
+        .path("/")
+        .http_only(true)
+        .same_site(SameSite::Lax);
+    let jar = jar.remove(removal);
+    Ok((jar, Redirect::to("/")))
+}
+
 pub fn auth_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/oauth-login", get(login_oauth))
         .route("/callback", post(oauth_callback))
+        .route("/logout", post(logout))
 }
