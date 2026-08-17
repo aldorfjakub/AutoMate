@@ -11,6 +11,7 @@ mod handlers;
 mod models;
 mod routes;
 mod state;
+mod extract;
 #[tokio::main]
 async fn main() {
     dotenv().ok();

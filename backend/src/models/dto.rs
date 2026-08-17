@@ -1,4 +1,5 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 #[derive(Deserialize)]
 pub struct OAuthRequest {
@@ -10,7 +11,7 @@ pub struct OAuthRequest {
 pub struct OAuthResponse {
     pub access_token: String,
     pub scope: String,
-    pub token_type: String
+    pub token_type: String,
 }
 
 #[derive(Deserialize)]
@@ -19,5 +20,34 @@ pub struct GithubResponse {
     pub id: u32,
     pub avatar_url: String,
     pub name: String,
-    pub email: Option<String>
+    pub email: Option<String>,
+}
+#[derive(Deserialize)]
+pub struct NewBotRequest {
+    pub name: String,
+    pub description: Option<String>,
+    pub source_code: String,
+    pub is_active: bool,
+    pub is_public: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct BotInfo {
+    pub id: Option<Uuid>,
+    pub name: String,
+    pub description: Option<String>,
+    pub source_code: Option<String>,
+    pub is_active: bool,
+    pub is_public: bool,
+    pub is_valid: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct BotSummary {
+    pub id: Option<Uuid>,
+    pub name: String,
+    pub description: Option<String>,
+    pub is_active: bool,
+    pub is_public: bool,
+    pub is_valid: bool,
 }
