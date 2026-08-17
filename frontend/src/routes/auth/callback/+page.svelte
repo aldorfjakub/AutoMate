@@ -2,7 +2,7 @@
 	import { onMount } from "svelte";
 	import { page } from "$app/state";
 	import { goto } from "$app/navigation";
-	import { API_BASE } from "$lib/api";
+	import { API_BASE, parseApiError } from "$lib/api";
 	import { auth } from "$lib/auth.svelte";
 
 	let status = "Verifying authentication...";
@@ -19,21 +19,11 @@
 
 			if (response.ok) {
 				status = "Login successful! Redirecting...";
-				await goto("/");
+				await goto("/bots");
 				return;
 			}
 
-			const text = await response.text();
-			let message = `Login failed on the server (${response.status}).`;
-			if (text) {
-				try {
-					const data = JSON.parse(text);
-					if (typeof data?.message === "string") message = data.message;
-				} catch {
-					// Non-JSON error body; keep the fallback message.
-				}
-			}
-			status = message;
+			status = await parseApiError(response);
 			error = true;
 		} catch {
 			status = "Connection to authentication server failed.";
@@ -65,7 +55,7 @@
 		}
 
 		if (auth.status === "authenticated") {
-			await goto("/");
+			await goto("/bots");
 			return;
 		}
 
