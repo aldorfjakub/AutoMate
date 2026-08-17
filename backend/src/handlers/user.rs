@@ -1,36 +1,26 @@
-use std::{str::FromStr, sync::Arc};
+use std::sync::Arc;
 
 use axum::{Json, Router, extract::State, routing::get};
-use axum_extra::extract::CookieJar;
-use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
+use crate::extract::SessionUser;
 use crate::models::user::BasicUserInfo;
 use crate::state::AppState;
 
 async fn user_info(
-    jar: CookieJar,
     State(state): State<Arc<AppState>>,
+    session: SessionUser,
 ) -> AppResult<Json<BasicUserInfo>> {
-    let session_cookie = jar
-        .get("session_id")
-        .ok_or(AppError::Unauthorized)?
-        .value()
-        .to_string();
-
-    let session_id = Uuid::from_str(&session_cookie).map_err(|_| AppError::BadRequest("session_id is missing"))?.as_bytes().to_vec();
     let user = sqlx::query_as!(
         BasicUserInfo,
         r#"
                     SELECT 
-                        u.display_name, 
-                        u.avatar_url
-                    FROM users u
-                    JOIN sessions s ON u.id = s.user_id
-                    WHERE s.id = ? 
-                    AND s.expires_at > CURRENT_TIMESTAMP
+                        display_name, 
+                        avatar_url
+                    FROM users
+                    WHERE id = ? 
                 "#,
-        session_id,
+        session.user_id,
     )
     .fetch_optional(&state.sqlite_pool)
     .await?
