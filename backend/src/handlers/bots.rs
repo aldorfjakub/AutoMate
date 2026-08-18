@@ -5,9 +5,11 @@ use axum::{
     extract::{Path, State},
     routing::{get, post, put},
 };
+use redis::AsyncCommands;
+use reqwest::StatusCode;
 use uuid::Uuid;
 
-use crate::error::{AppError, AppResult};
+use crate::{error::{AppError, AppResult}, models::dto::Job};
 use crate::extract::SessionUser;
 use crate::models::dto::{BotInfo, BotSummary, NewBotRequest};
 use crate::state::AppState;
@@ -146,17 +148,28 @@ async fn validate_bot(
     State(state): State<Arc<AppState>>,
     Path(bot_id): Path<Uuid>,
     session: SessionUser,
-) -> AppResult<()> {
-    // Get the code from db, check if not already validated
-    // Spawn test container and run the validation
-    // If correct marked it into the database
-    // If not return error
-    Ok(())
+) -> AppResult<StatusCode> {
+    let bot = sqlx::query_as!(BotInfo,r#"SELECT id as "id: uuid::Uuid", name, description, is_active, is_public, source_code, is_valid FROM bots WHERE id = ? AND user_id = ?"#, &bot_id, &session.user_id).fetch_optional(&state.sqlite_pool).await?.ok_or(AppError::NotFound)?;
+    if bot.is_valid {
+        return Err(AppError::BadRequest("Bot is already validated."));
+    }
+
+    let job_id = format!("job_{}",Uuid::now_v7().to_string());
+
+    let job = Job::Validate { bot_id: bot_id.to_string(), job_id: job_id.clone()};
+    let mut redis_conn = state.redis_con.clone();
+    let _: () = redis_conn.set_ex(&job_id, "queued", 600).await.map_err(|_| AppError::Internal("Redis failed"))?;
+    let _: () = redis_conn.lpush("job_queue", serde_json::to_string(&job).map_err(|_| AppError::Internal("Failed to serialize job to json"))?).await.map_err(|_| AppError::Internal("Redis failed"))?;
+
+    Ok(StatusCode::ACCEPTED)
 }
 
 pub fn bots_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/", get(get_user_bots).post(register_bot))
-        .route("/{id}",get(get_bot_details).put(update_bot).delete(delete_bot),)
+        .route(
+            "/{id}",
+            get(get_bot_details).put(update_bot).delete(delete_bot),
+        )
         .route("/{id}/validate", post(validate_bot))
 }

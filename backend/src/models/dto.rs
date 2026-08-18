@@ -51,3 +51,17 @@ pub struct BotSummary {
     pub is_public: bool,
     pub is_valid: bool,
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum Job {
+    Validate {
+        bot_id: String,
+        job_id: String,
+    },
+    Match {
+        match_id: String,
+        bot1_id: String,
+        bot2_id: String,
+    }
+}
