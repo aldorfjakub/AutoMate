@@ -3,13 +3,13 @@ use std::sync::Arc;
 use axum::{
     Json, Router,
     extract::{Path, State},
-    routing::{get, post, put},
+    routing::{get, post},
 };
 use redis::AsyncCommands;
 use reqwest::StatusCode;
 use uuid::Uuid;
 
-use crate::{error::{AppError, AppResult}, models::dto::Job};
+use crate::{error::{AppError, AppResult}, models::dto::{Job, ValidationStatus}};
 use crate::extract::SessionUser;
 use crate::models::dto::{BotInfo, BotSummary, NewBotRequest};
 use crate::state::AppState;
@@ -158,7 +158,8 @@ async fn validate_bot(
 
     let job = Job::Validate { bot_id: bot_id.to_string(), job_id: job_id.clone()};
     let mut redis_conn = state.redis_con.clone();
-    let _: () = redis_conn.set_ex(&job_id, "queued", 600).await.map_err(|_| AppError::Internal("Redis failed"))?;
+    let status = ValidationStatus::Pending;
+    let _: () = redis_conn.set_ex(&job_id, serde_json::to_string(&status).map_err(|_| AppError::Internal("Failed to serialize job_status to json"))?, 600).await.map_err(|_| AppError::Internal("Redis failed"))?;
     let _: () = redis_conn.lpush("job_queue", serde_json::to_string(&job).map_err(|_| AppError::Internal("Failed to serialize job to json"))?).await.map_err(|_| AppError::Internal("Redis failed"))?;
 
     Ok(StatusCode::ACCEPTED)

@@ -65,3 +65,13 @@ pub enum Job {
         bot2_id: String,
     }
 }
+
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "status")]
+pub enum ValidationStatus {
+    Pending,
+    Running,
+    Validated,
+    Failed { reason: String },
+}
