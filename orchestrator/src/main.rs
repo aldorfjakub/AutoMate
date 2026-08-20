@@ -35,6 +35,18 @@ pub enum Job {
     },
 }
 
+
+#[derive(Serialize, Deserialize)]
+pub struct BotInfo {
+    pub id: Option<Uuid>,
+    pub name: String,
+    pub description: Option<String>,
+    pub source_code: Option<String>,
+    pub is_active: bool,
+    pub is_public: bool,
+    pub is_valid: bool,
+}
+
 #[tokio::main]
 async fn main() {
     dotenv().ok();
@@ -117,34 +129,49 @@ async fn validate_bot(
     mut redis_conn: MultiplexedConnection,
 ) {
     //sleep(tokio::time::Duration::from_secs(5)).await;
-    let a = r#"import chess
-import random
+    let _: Result<(), redis::RedisError> = redis_conn
+                .set_ex(
+                    &job_id,
+                    serde_json::to_string(&ValidationStatus::Running)
+                    .unwrap(),
+                    600,
+                )
+                .await;  
 
-number = 1
+    let bot = match sqlx::query_as!(BotInfo,r#"SELECT id as "id: uuid::Uuid", name, description, is_active, is_public, source_code, is_valid FROM bots WHERE id = ?"#, &bot_id).fetch_optional(&db_pool).await
+    {
+        Ok(Some(bot)) => bot,
+        Ok(_) => {
+            let _: Result<(), redis::RedisError> = redis_conn
+            .set_ex(
+                job_id,
+                serde_json::to_string(&ValidationStatus::Failed {
+                    reason: "No such bot".to_string(),
+                })
+                .unwrap(),
+                600,
+            )
+            .await;
+            return;
+        }
+        _ => {
+            let _: Result<(), redis::RedisError> = redis_conn
+            .set_ex(
+                job_id,
+                serde_json::to_string(&ValidationStatus::Failed {
+                    reason: "Internal error".to_string(),
+                })
+                .unwrap(),
+                600,
+            )
+            .await;    
 
-def get_chess_move(fen: str):
-    global number
-    board = chess.Board(fen)
-    legal_moves = list(board.generate_legal_moves())
-    captures = list(board.generate_legal_captures())
 
-    for move in legal_moves:
-        board.push(move)
-        if board.is_checkmate():
-            return move.uci()
-        board.pop()
-    for move in legal_moves:
-        if "q" in move.uci().lower():
-            return move.uci()
-            
-    if captures:
-        return random.choice(captures).uci()
-        
-    return random.choice(legal_moves).uci()
-"#
-    .to_string();
-
-    println!("Executing code of size: {}", a.len());
+            return
+        }
+    };
+    let source_code = bot.source_code.unwrap();
+    println!("Executing code of size: {}", source_code.len());
 
     let mut process = Command::new("docker")
         .args(&[
@@ -169,11 +196,11 @@ def get_chess_move(fen: str):
         .spawn()
         .unwrap();
 
-    let a_bytes = a.as_bytes();
+    let source_bytes = source_code.as_bytes();
 
     let mut valid = true;
     if let Some(mut stdin) = process.stdin.take() {
-        stdin.write_all(&a_bytes).await.unwrap();
+        stdin.write_all(&source_bytes).await.unwrap();
         stdin.write_all(b"\n").await.unwrap();
 
         stdin

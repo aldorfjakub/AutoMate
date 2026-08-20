@@ -1,5 +1,5 @@
 import { API_BASE, parseApiError } from "../api";
-import type { BotInfo, BotSummary, NewBotRequest } from "$lib/types";
+import type { BotInfo, BotSummary, NewBotRequest, ValidateBotResponse, ValidationStatus } from "$lib/types";
 
 export class ApiError extends Error {
 	status: number;
@@ -50,4 +50,13 @@ export function updateBot(id: string, req: NewBotRequest): Promise<void> {
 
 export function deleteBot(id: string): Promise<void> {
 	return request<void>(`/api/bots/${id}`, { method: "DELETE" });
+}
+
+export function validateBot(id: string): Promise<ValidateBotResponse> {
+	return request<ValidateBotResponse>(`/api/bots/${id}/validate`, { method: "POST" });
+}
+
+// The status endpoint is keyed by the job_id returned from validateBot, not the bot id.
+export function getValidationStatus(jobId: string): Promise<ValidationStatus> {
+	return request<ValidationStatus>(`/api/bots/${jobId}/status`);
 }

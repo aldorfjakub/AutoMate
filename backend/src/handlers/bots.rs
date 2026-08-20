@@ -3,16 +3,21 @@ use std::sync::Arc;
 use axum::{
     Json, Router,
     extract::{Path, State},
+    response::{IntoResponse, Response},
     routing::{get, post},
 };
 use redis::AsyncCommands;
 use reqwest::StatusCode;
+use serde_json::json;
 use uuid::Uuid;
 
-use crate::{error::{AppError, AppResult}, models::dto::{Job, ValidationStatus}};
 use crate::extract::SessionUser;
 use crate::models::dto::{BotInfo, BotSummary, NewBotRequest};
 use crate::state::AppState;
+use crate::{
+    error::{AppError, AppResult},
+    models::dto::{Job, ValidationStatus},
+};
 
 const MIN_NAME_LEN: usize = 5;
 const MAX_NAME_LEN: usize = 32;
@@ -143,26 +148,60 @@ async fn register_bot(
     Ok(())
 }
 
-// Not done
 async fn validate_bot(
     State(state): State<Arc<AppState>>,
     Path(bot_id): Path<Uuid>,
     session: SessionUser,
-) -> AppResult<StatusCode> {
+) -> AppResult<Response> {
     let bot = sqlx::query_as!(BotInfo,r#"SELECT id as "id: uuid::Uuid", name, description, is_active, is_public, source_code, is_valid FROM bots WHERE id = ? AND user_id = ?"#, &bot_id, &session.user_id).fetch_optional(&state.sqlite_pool).await?.ok_or(AppError::NotFound)?;
     if bot.is_valid {
         return Err(AppError::BadRequest("Bot is already validated."));
     }
 
-    let job_id = format!("job_{}",Uuid::now_v7().to_string());
+    let job_id = format!("job_{}", Uuid::now_v7().to_string());
 
-    let job = Job::Validate { bot_id: bot_id.to_string(), job_id: job_id.clone()};
-    let mut redis_conn = state.redis_con.clone();
+    let job = Job::Validate {
+        bot_id: bot_id.to_string(),
+        job_id: job_id.clone(),
+    };
+    let mut redis_conn: redis::aio::MultiplexedConnection = state.redis_con.clone();
     let status = ValidationStatus::Pending;
-    let _: () = redis_conn.set_ex(&job_id, serde_json::to_string(&status).map_err(|_| AppError::Internal("Failed to serialize job_status to json"))?, 600).await.map_err(|_| AppError::Internal("Redis failed"))?;
-    let _: () = redis_conn.lpush("job_queue", serde_json::to_string(&job).map_err(|_| AppError::Internal("Failed to serialize job to json"))?).await.map_err(|_| AppError::Internal("Redis failed"))?;
+    let _: () = redis_conn
+        .set_ex(
+            &job_id,
+            serde_json::to_string(&status)
+                .map_err(|_| AppError::Internal("Failed to serialize job_status to json"))?,
+            600,
+        )
+        .await
+        .map_err(|_| AppError::Internal("Redis failed"))?;
+    let _: () = redis_conn
+        .lpush(
+            "job_queue",
+            serde_json::to_string(&job)
+                .map_err(|_| AppError::Internal("Failed to serialize job to json"))?,
+        )
+        .await
+        .map_err(|_| AppError::Internal("Redis failed"))?;
 
-    Ok(StatusCode::ACCEPTED)
+    Ok((StatusCode::ACCEPTED, Json(json!({"job_id": job_id}))).into_response())
+}
+
+async fn get_job_status(
+    State(state): State<Arc<AppState>>,
+    Path(job_id): Path<String>,
+    session: SessionUser,
+) -> AppResult<Json<ValidationStatus>> {
+    let mut redis_conn: redis::aio::MultiplexedConnection = state.redis_con.clone();
+
+    let res: String = redis_conn
+        .get(job_id)
+        .await
+        .map_err(|_| AppError::NotFound)?;
+    let status: ValidationStatus = serde_json::from_str(&res)
+        .map_err(|_| AppError::Internal("Failed to parse validation status"))?;
+
+    Ok(Json(status))
 }
 
 pub fn bots_routes() -> Router<Arc<AppState>> {
@@ -173,4 +212,5 @@ pub fn bots_routes() -> Router<Arc<AppState>> {
             get(get_bot_details).put(update_bot).delete(delete_bot),
         )
         .route("/{id}/validate", post(validate_bot))
+        .route("/{id}/status", get(get_job_status))
 }

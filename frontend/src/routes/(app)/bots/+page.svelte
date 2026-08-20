@@ -1,26 +1,91 @@
 <script lang="ts">
-	import { onMount } from "svelte";
+	import { onDestroy, onMount } from "svelte";
 	import { Button } from "$lib/components/ui/button";
 	import * as Card from "$lib/components/ui/card";
 	import { Badge } from "$lib/components/ui/badge";
 	import { checkAuth } from "$lib/auth.svelte";
-	import { deleteBot, listBots, ApiError } from "$lib/api/bots";
+	import { deleteBot, listBots, validateBot, getValidationStatus, ApiError } from "$lib/api/bots";
 	import type { BotSummary } from "$lib/types";
 	import { Bot, Code2, Trash2, Pencil, Plus, LoaderCircle } from "lucide-svelte";
+
+	type JobState = {
+		jobId: string;
+		timer?: ReturnType<typeof setInterval>;
+		attempts: number;
+	};
 
 	let bots = $state<BotSummary[]>([]);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
+	let jobs = $state<Record<string, JobState>>({});
+	let jobErrors = $state<Record<string, string>>({});
+
+	const POLL_INTERVAL_MS = 2000;
+	const MAX_ATTEMPTS = 60;
+
+	function stopJob(botId: string) {
+		const job = jobs[botId];
+		if (job?.timer) clearInterval(job.timer);
+		delete jobs[botId];
+	}
+
+	function failJob(botId: string, message: string) {
+		stopJob(botId);
+		jobErrors[botId] = message;
+	}
 
 	async function load() {
 		error = null;
 		loading = true;
 		try {
 			bots = await listBots();
+			const ids = new Set(bots.map((b) => b.id));
+			for (const key of Object.keys(jobs)) if (!ids.has(key)) stopJob(key);
+			for (const key of Object.keys(jobErrors)) if (!ids.has(key)) delete jobErrors[key];
 		} catch (e) {
 			error = e instanceof ApiError ? e.message : "Could not load your bots.";
 		} finally {
 			loading = false;
+		}
+	}
+
+	async function pollStatus(botId: string) {
+		const job = jobs[botId];
+		if (!job) return;
+		job.attempts += 1;
+		if (job.attempts > MAX_ATTEMPTS) {
+			failJob(botId, "Validation timed out; try again.");
+			return;
+		}
+		try {
+			const status = await getValidationStatus(job.jobId);
+			if (status.status === "Validated") {
+				stopJob(botId);
+				await load();
+			} else if (status.status === "Failed") {
+				failJob(botId, status.reason);
+			}
+		} catch (e) {
+			if (e instanceof ApiError && e.status === 404) {
+				failJob(botId, "Validation job expired or unavailable; try again.");
+			} else {
+				failJob(botId, e instanceof ApiError ? e.message : "Could not check validation status.");
+			}
+		}
+	}
+
+	async function handleValidate(bot: BotSummary) {
+		if (!bot.id || jobs[bot.id]) return;
+		try {
+			const { job_id } = await validateBot(bot.id);
+			jobs[bot.id] = { jobId: job_id, attempts: 0 };
+			jobs[bot.id].timer = setInterval(() => pollStatus(bot.id ?? ""), POLL_INTERVAL_MS);
+		} catch (e) {
+			if (e instanceof ApiError && e.status === 400) {
+				await load();
+			} else {
+				jobErrors[bot.id] = e instanceof ApiError ? e.message : "Could not start validation.";
+			}
 		}
 	}
 
@@ -30,6 +95,8 @@
 		if (!confirmed) return;
 		try {
 			await deleteBot(bot.id);
+			stopJob(bot.id);
+			delete jobErrors[bot.id];
 			bots = bots.filter((b) => b.id !== bot.id);
 		} catch (e) {
 			error = e instanceof ApiError ? e.message : "Could not delete the bot.";
@@ -39,6 +106,13 @@
 	onMount(async () => {
 		await checkAuth();
 		await load();
+	});
+
+	onDestroy(() => {
+		for (const key of Object.keys(jobs)) {
+			const job = jobs[key];
+			if (job?.timer) clearInterval(job.timer);
+		}
 	});
 </script>
 
@@ -85,6 +159,11 @@
 						<div class="flex items-start justify-between gap-2">
 							<Card.Title class="truncate">{bot.name}</Card.Title>
 							<div class="flex shrink-0 gap-1">
+								{#if !bot.is_valid && !jobs[bot.id]}
+									<Button variant="outline" size="sm" onclick={() => handleValidate(bot)}>
+										Validate
+									</Button>
+								{/if}
 								<a href={`/bots/${bot.id}/edit`} aria-label="Edit">
 									<Button variant="ghost" size="icon-sm"><Pencil class="h-4 w-4" /></Button>
 								</a>
@@ -112,6 +191,14 @@
 						<Badge variant={bot.is_valid ? "default" : "outline"}>
 							{bot.is_valid ? "Validated" : "Unvalidated"}
 						</Badge>
+						{#if jobs[bot.id] && !bot.is_valid}
+							<Badge variant="secondary">
+								<LoaderCircle class="animate-spin" /> Validating…
+							</Badge>
+						{/if}
+						{#if jobErrors[bot.id] && !jobs[bot.id] && !bot.is_valid}
+							<Badge variant="destructive">Failed: {jobErrors[bot.id]}</Badge>
+						{/if}
 					</Card.Footer>
 				</Card.Root>
 			{/each}

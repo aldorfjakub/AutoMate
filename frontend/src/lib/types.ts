@@ -5,7 +5,7 @@ export interface User {
 }
 
 export interface BotSummary {
-	id?: string;
+	id: string;
 	name: string;
 	description?: string | null;
 	is_active: boolean;
@@ -24,3 +24,13 @@ export interface NewBotRequest {
 	is_active: boolean;
 	is_public: boolean;
 }
+
+export interface ValidateBotResponse {
+	job_id: string;
+}
+
+export type ValidationStatus =
+	| { status: "Pending" }
+	| { status: "Running" }
+	| { status: "Validated" }
+	| { status: "Failed"; reason: string };
