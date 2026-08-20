@@ -61,12 +61,22 @@ async fn update_bot(
 ) -> AppResult<()> {
     validate_payload(&payload)?;
 
+    // If the code differs set is_valid to false for obvious reasons
+    let original_bot = sqlx::query!(
+        "SELECT source_code, is_valid FROM bots WHERE id = ? AND user_id = ?",
+        &bot_id,
+        &session.user_id
+    )
+    .fetch_one(&state.sqlite_pool)
+    .await?;
+    let is_same_code = original_bot.source_code == payload.source_code;
     let res = sqlx::query!(
-        "UPDATE bots SET name = ?, description = ?, source_code = ?, is_active = ?, is_public = ? WHERE id = ? AND user_id = ?",
+        "UPDATE bots SET name = ?, description = ?, source_code = ?, is_active = ?, is_public = ?, is_valid = ? WHERE id = ? AND user_id = ?",
         &payload.name, &payload.description,
         &payload.source_code,
         payload.is_active,
         payload.is_public,
+        (original_bot.is_valid && is_same_code),
         &bot_id,
         &session.user_id)
     .execute(&state.sqlite_pool).await?;

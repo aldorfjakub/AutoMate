@@ -302,7 +302,8 @@ async fn validate_bot(
     let _ = process.wait().await;
 
     if valid {
-        let res = sqlx::query!("UPDATE bots SET is_valid = ? WHERE id = ?", true, bot_id)
+        // Update the bot with the result, also checking if the code hasn't changed during the process
+        let res = sqlx::query!("UPDATE bots SET is_valid = ? WHERE id = ? AND source_code = ?", true, bot_id, &source_code)
             .execute(&db_pool)
             .await;
         match res {
