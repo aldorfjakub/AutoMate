@@ -35,7 +35,6 @@ pub enum Job {
     },
 }
 
-
 #[derive(Serialize, Deserialize)]
 pub struct BotInfo {
     pub id: Option<Uuid>,
@@ -122,58 +121,52 @@ async fn init_pool() -> SqlitePool {
     pool
 }
 
+async fn publish_status(
+    redis_conn: &mut MultiplexedConnection,
+    job_id: &str,
+    status: ValidationStatus,
+) {
+    let json = serde_json::to_string(&status).expect("serialize ValidationStatus");
+    let _: Result<(), redis::RedisError> = redis_conn.set_ex(job_id, json, 600).await;
+}
+
 async fn validate_bot(
     bot_id: Uuid,
     job_id: String,
     db_pool: SqlitePool,
     mut redis_conn: MultiplexedConnection,
 ) {
-    //sleep(tokio::time::Duration::from_secs(5)).await;
-    let _: Result<(), redis::RedisError> = redis_conn
-                .set_ex(
-                    &job_id,
-                    serde_json::to_string(&ValidationStatus::Running)
-                    .unwrap(),
-                    600,
-                )
-                .await;  
+    publish_status(&mut redis_conn, &job_id, ValidationStatus::Running).await;
 
     let bot = match sqlx::query_as!(BotInfo,r#"SELECT id as "id: uuid::Uuid", name, description, is_active, is_public, source_code, is_valid FROM bots WHERE id = ?"#, &bot_id).fetch_optional(&db_pool).await
     {
         Ok(Some(bot)) => bot,
         Ok(_) => {
-            let _: Result<(), redis::RedisError> = redis_conn
-            .set_ex(
-                job_id,
-                serde_json::to_string(&ValidationStatus::Failed {
-                    reason: "No such bot".to_string(),
-                })
-                .unwrap(),
-                600,
+            publish_status(&mut redis_conn, &job_id, ValidationStatus::Failed {reason: "No such bot".to_string()}).await;
+            return;
+        }
+        _ => {
+            publish_status(&mut redis_conn, &job_id, ValidationStatus::Failed {reason: "Internal error".to_string()}).await;
+            return;
+        }
+    };
+    let source_code = match bot.source_code {
+        Some(code) => code,
+        None => {
+            publish_status(
+                &mut redis_conn,
+                &job_id,
+                ValidationStatus::Failed {
+                    reason: "Bot has no source code".to_string(),
+                },
             )
             .await;
             return;
         }
-        _ => {
-            let _: Result<(), redis::RedisError> = redis_conn
-            .set_ex(
-                job_id,
-                serde_json::to_string(&ValidationStatus::Failed {
-                    reason: "Internal error".to_string(),
-                })
-                .unwrap(),
-                600,
-            )
-            .await;    
-
-
-            return
-        }
     };
-    let source_code = bot.source_code.unwrap();
     println!("Executing code of size: {}", source_code.len());
 
-    let mut process = Command::new("docker")
+    let mut process = match Command::new("docker")
         .args(&[
             "run",
             "-i",
@@ -194,82 +187,62 @@ async fn validate_bot(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .unwrap();
+    {
+        Ok(pr) => pr,
+        Err(e) => {
+            eprintln!("{}", e);
+            publish_status(
+                &mut redis_conn,
+                &job_id,
+                ValidationStatus::Failed {
+                    reason: "Internal error".to_string(),
+                },
+            )
+            .await;
+
+            return;
+        }
+    };
 
     let source_bytes = source_code.as_bytes();
 
     let mut valid = true;
     if let Some(mut stdin) = process.stdin.take() {
-        stdin.write_all(&source_bytes).await.unwrap();
-        stdin.write_all(b"\n").await.unwrap();
+        if stdin.write_all(&source_bytes).await.is_err()
+            || stdin.write_all(b"\n").await.is_err()
+            || stdin
+                .write_all(b"===END_OF_WORKER_CODE===\n")
+                .await
+                .is_err()
+        {
+            valid = false;
+            let _ = stdin.flush().await;
+            drop(stdin);
+        } else {
+            let _ = stdin.flush().await;
 
-        stdin
-            .write_all(b"===END_OF_WORKER_CODE===\n")
-            .await
-            .unwrap();
-        stdin.flush().await.unwrap();
+            let stdout = process.stdout.take().expect("missing stdout pipe");
+            let stderr = process.stderr.take().expect("missing stderr pipe");
+            let mut reader = tokio::io::BufReader::new(stdout);
+            let mut stderr_reader = tokio::io::BufReader::new(stderr);
+            let mut line = String::new();
 
-        let stdout = process.stdout.take().unwrap();
-        let stderr = process.stderr.take().unwrap();
-        let mut reader = tokio::io::BufReader::new(stdout);
-        let mut stderr_reader = tokio::io::BufReader::new(stderr);
-        let mut line = String::new();
-
-        // Wait for the worker to signal that it finished loading.
-        loop {
-            line.clear();
-            let n = reader.read_line(&mut line).await.unwrap();
-            if n == 0 {
-                valid = false;
-                break;
-            }
-            let trimmed = line.trim();
-            if trimmed == "READY" {
-                break;
-            }
-            if trimmed.starts_with("ERROR") {
-                println!("{}", trimmed);
-                valid = false;
-                break;
-            }
-        }
-
-        // Play out a match of up to 20 moves, verifying the worker's
-        // moves are legal in the current position.
-        let mut pos = Chess::new();
-        for _ in 0..20 {
-            if !valid || pos.outcome() != Outcome::Unknown {
-                break;
-            }
-
-            let fen = Fen::from_position(&pos, EnPassantMode::Legal).to_string();
-            stdin.write_all(fen.as_bytes()).await.unwrap();
-            stdin.write_all(b"\n").await.unwrap();
-            stdin.flush().await.unwrap();
-
+            // Wait for the worker to signal that it finished loading.
             loop {
                 line.clear();
-                let n = reader.read_line(&mut line).await.unwrap();
-                if n == 0 {
-                    valid = false;
-                    break;
+                match reader.read_line(&mut line).await {
+                    Ok(0) => {
+                        valid = false;
+                        break;
+                    }
+                    Ok(_) => (),
+                    Err(_) => {
+                        valid = false;
+                        break;
+                    }
                 }
                 let trimmed = line.trim();
-                if let Some(uci) = trimmed.strip_prefix("move:") {
-                    let uci = uci.trim();
-                    match uci.parse::<UciMove>() {
-                        Ok(uci_move) => match uci_move.to_move(&pos) {
-                            Ok(m) => pos.play_unchecked(m),
-                            Err(_) => {
-                                println!("invalid move from worker: {uci}");
-                                valid = false;
-                            }
-                        },
-                        Err(_) => {
-                            println!("unparseable move from worker: {uci}");
-                            valid = false;
-                        }
-                    }
+                if trimmed == "READY" {
                     break;
                 }
                 if trimmed.starts_with("ERROR") {
@@ -278,85 +251,134 @@ async fn validate_bot(
                     break;
                 }
             }
-        }
 
-        let _ = stdin.write_all(b"kill\n").await;
-        let _ = stdin.flush().await;
-        drop(stdin);
+            // Play out a match of up to 20 moves, verifying the worker's
+            // moves are legal in the current position.
+            let mut pos = Chess::new();
+            for _ in 0..20 {
+                if !valid || pos.outcome() != Outcome::Unknown {
+                    break;
+                }
 
-        // Drain the remaining output before the process is reaped.
-        let mut stdout_rest = String::new();
-        let _ = reader.read_to_string(&mut stdout_rest).await;
-        let mut stderr_rest = String::new();
-        let _ = stderr_reader.read_to_string(&mut stderr_rest).await;
+                let fen = Fen::from_position(&pos, EnPassantMode::Legal).to_string();
+                if stdin.write_all(fen.as_bytes()).await.is_err()
+                    || stdin.write_all(b"\n").await.is_err()
+                {
+                    valid = false;
+                    break;
+                }
+                let _ = stdin.flush().await;
 
-        if !stdout_rest.is_empty() {
-            print!("{}", stdout_rest);
-        }
-        if !stderr_rest.is_empty() {
-            eprint!("{}", stderr_rest);
+                loop {
+                    line.clear();
+                    match reader.read_line(&mut line).await {
+                        Ok(0) => {
+                            valid = false;
+                            break;
+                        }
+                        Ok(_) => (),
+                        Err(_) => {
+                            valid = false;
+                            break;
+                        }
+                    }
+                    let trimmed = line.trim();
+                    if let Some(uci) = trimmed.strip_prefix("move:") {
+                        let uci = uci.trim();
+                        match uci.parse::<UciMove>() {
+                            Ok(uci_move) => match uci_move.to_move(&pos) {
+                                Ok(m) => pos.play_unchecked(m),
+                                Err(_) => {
+                                    println!("invalid move from worker: {uci}");
+                                    valid = false;
+                                }
+                            },
+                            Err(_) => {
+                                println!("unparseable move from worker: {uci}");
+                                valid = false;
+                            }
+                        }
+                        break;
+                    }
+                    if trimmed.starts_with("ERROR") {
+                        println!("{}", trimmed);
+                        valid = false;
+                        break;
+                    }
+                }
+            }
+
+            let _ = stdin.write_all(b"kill\n").await;
+            let _ = stdin.flush().await;
+            drop(stdin);
+
+            // Drain the remaining output before the process is reaped.
+            let mut stdout_rest = String::new();
+            let _ = reader.read_to_string(&mut stdout_rest).await;
+            let mut stderr_rest = String::new();
+            let _ = stderr_reader.read_to_string(&mut stderr_rest).await;
+
+            if !stdout_rest.is_empty() {
+                print!("{}", stdout_rest);
+            }
+            if !stderr_rest.is_empty() {
+                eprint!("{}", stderr_rest);
+            }
         }
     } else {
         valid = false;
     }
+
     let _ = process.wait().await;
 
     if valid {
         // Update the bot with the result, also checking if the code hasn't changed during the process
-        let res = sqlx::query!("UPDATE bots SET is_valid = ? WHERE id = ? AND source_code = ?", true, bot_id, &source_code)
-            .execute(&db_pool)
-            .await;
+        let res = sqlx::query!(
+            "UPDATE bots SET is_valid = ? WHERE id = ? AND source_code = ?",
+            true,
+            bot_id,
+            &source_code
+        )
+        .execute(&db_pool)
+        .await;
         match res {
             Ok(res) => {
                 if res.rows_affected() == 1 {
                     println!("validated");
-                    let _: Result<(), redis::RedisError> = redis_conn
-                        .set_ex(
-                            job_id,
-                            serde_json::to_string(&ValidationStatus::Validated).unwrap(),
-                            600,
-                        )
-                        .await;
+                    publish_status(&mut redis_conn, &job_id, ValidationStatus::Validated).await;
                 } else {
                     println!("failed no such bot");
-                    let _: Result<(), redis::RedisError> = redis_conn
-                        .set_ex(
-                            job_id,
-                            serde_json::to_string(&ValidationStatus::Failed {
-                                reason: "No such bot exists".to_string(),
-                            })
-                            .unwrap(),
-                            600,
-                        )
-                        .await;
+                    publish_status(
+                        &mut redis_conn,
+                        &job_id,
+                        ValidationStatus::Failed {
+                            reason: "No such bot exists".to_string(),
+                        },
+                    )
+                    .await;
                 }
             }
 
             Err(_) => {
                 println!("failed");
-
-                let _: Result<(), redis::RedisError> = redis_conn
-                    .set_ex(
-                        job_id,
-                        serde_json::to_string(&ValidationStatus::Failed {
-                            reason: "Something fail :( (good enough for now)".to_string(),
-                        })
-                        .unwrap(),
-                        600,
-                    )
-                    .await;
+                publish_status(
+                    &mut redis_conn,
+                    &job_id,
+                    ValidationStatus::Failed {
+                        reason: "Something fail :( (good enough for now)".to_string(),
+                    },
+                )
+                .await;
             }
         }
     } else {
-        let _: Result<(), redis::RedisError> = redis_conn
-            .set_ex(
-                job_id,
-                serde_json::to_string(&ValidationStatus::Failed {
-                    reason: "Something fail :( (good enough for now)".to_string(),
-                })
-                .unwrap(),
-                600,
-            )
-            .await;
+        publish_status(
+            &mut redis_conn,
+            &job_id,
+            ValidationStatus::Failed {
+                reason: "Something fail :( (good enough for now)".to_string(),
+            },
+        )
+        .await;
     }
 }
