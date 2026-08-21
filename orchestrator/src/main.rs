@@ -8,7 +8,7 @@ use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt},
     process::Command,
-    time::sleep,
+    time::{sleep, timeout},
 };
 use uuid::Uuid;
 
@@ -186,6 +186,7 @@ async fn validate_bot(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .kill_on_drop(true)
         .spawn()
     {
         Ok(pr) => pr,
@@ -207,6 +208,8 @@ async fn validate_bot(
     let source_bytes = source_code.as_bytes();
 
     let mut valid = true;
+    let mut timed_out: bool = false;
+
     if let Some(mut stdin) = process.stdin.take() {
         if stdin.write_all(&source_bytes).await.is_err()
             || stdin.write_all(b"\n").await.is_err()
@@ -230,16 +233,24 @@ async fn validate_bot(
             // Wait for the worker to signal that it finished loading.
             loop {
                 line.clear();
-                match reader.read_line(&mut line).await {
-                    Ok(0) => {
+                match timeout(Duration::from_secs(10), reader.read_line(&mut line)).await {
+                    Ok(Ok(0)) => {
                         valid = false;
                         break;
                     }
-                    Ok(_) => (),
+                    Ok(Ok(_)) => (),
+                    Ok(Err(_)) => {
+                        valid = false;
+                        break;
+                    }
                     Err(_) => {
+                        eprintln!("worker code took too long to load");
                         valid = false;
-                        break;
+                        timed_out = true;
                     }
+                }
+                if timed_out {
+                    break;
                 }
                 let trimmed = line.trim();
                 if trimmed == "READY" {
@@ -252,11 +263,27 @@ async fn validate_bot(
                 }
             }
 
+            if timed_out {
+                println!("Took too long");
+                publish_status(
+                    &mut redis_conn,
+                    &job_id,
+                    ValidationStatus::Failed {
+                        reason: "Bot code took to long to read".to_string(),
+                    },
+                )
+                .await;
+                let _ = process.kill().await;
+                let _ = process.wait().await;
+
+                return;
+            }
+
             // Play out a match of up to 20 moves, verifying the worker's
             // moves are legal in the current position.
             let mut pos = Chess::new();
             for _ in 0..20 {
-                if !valid || pos.outcome() != Outcome::Unknown {
+                if timed_out || !valid || pos.outcome() != Outcome::Unknown {
                     break;
                 }
 
@@ -271,16 +298,22 @@ async fn validate_bot(
 
                 loop {
                     line.clear();
-                    match reader.read_line(&mut line).await {
-                        Ok(0) => {
+                    match timeout(Duration::from_millis(1200), reader.read_line(&mut line)).await {
+                        Ok(Ok(0)) => {
                             valid = false;
                             break;
                         }
-                        Ok(_) => (),
+                        Ok(Ok(_)) => (),
+                        Ok(Err(_)) => {
+                            valid = false;
+                            break;
+                        }
                         Err(_) => {
-                            valid = false;
-                            break;
+                            timed_out = true;
                         }
+                    }
+                    if timed_out {
+                        break;
                     }
                     let trimmed = line.trim();
                     if let Some(uci) = trimmed.strip_prefix("move:") {
@@ -308,16 +341,41 @@ async fn validate_bot(
                 }
             }
 
+            if timed_out {
+                println!("Took too long");
+                publish_status(
+                    &mut redis_conn,
+                    &job_id,
+                    ValidationStatus::Failed {
+                        reason: "Bot took over 1s to return a move".to_string(),
+                    },
+                )
+                .await;
+                let _ = process.kill().await;
+                let _ = process.wait().await;
+
+                return;
+            }
+
             let _ = stdin.write_all(b"kill\n").await;
             let _ = stdin.flush().await;
             drop(stdin);
 
             // Drain the remaining output before the process is reaped.
             let mut stdout_rest = String::new();
-            let _ = reader.read_to_string(&mut stdout_rest).await;
+            match timeout(Duration::from_secs(2), reader.read_to_string(&mut stdout_rest)).await{
+                Ok(_) => (),
+                Err(_) => {
+                    // Some logging later
+                }
+            };
             let mut stderr_rest = String::new();
-            let _ = stderr_reader.read_to_string(&mut stderr_rest).await;
-
+            match timeout(Duration::from_secs(2), stderr_reader.read_to_string(&mut stderr_rest)).await{
+                Ok(_) => (),
+                Err(_) => {
+                    // Some logging later
+                }
+            };
             if !stdout_rest.is_empty() {
                 print!("{}", stdout_rest);
             }
@@ -329,7 +387,15 @@ async fn validate_bot(
         valid = false;
     }
 
-    let _ = process.wait().await;
+    match timeout(Duration::from_secs(2), process.wait()).await {
+        Ok(_) => (),
+        Err(_) => {
+
+            let _ = process.kill().await;
+            let _ = process.wait().await;
+
+        }
+    }
 
     if valid {
         // Update the bot with the result, also checking if the code hasn't changed during the process
