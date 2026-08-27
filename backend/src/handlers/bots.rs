@@ -11,7 +11,7 @@ use reqwest::StatusCode;
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::extract::SessionUser;
+use crate::{extract::SessionUser, handlers::user, models::dto::{MatchRequest, MatchStatus}};
 use crate::models::dto::{BotInfo, BotSummary, NewBotRequest};
 use crate::state::AppState;
 use crate::{
@@ -214,6 +214,80 @@ async fn get_job_status(
     Ok(Json(status))
 }
 
+
+// TEMPORARY
+// TODO replace both get_math_status and get_job_status with single function or think of better solution
+async fn get_match_status(
+    State(state): State<Arc<AppState>>,
+    Path(match_id): Path<String>,
+    session: SessionUser,
+) -> AppResult<Json<MatchStatus>> {
+    let mut redis_conn: redis::aio::MultiplexedConnection = state.redis_con.clone();
+
+    let res: String = redis_conn
+        .get(match_id)
+        .await
+        .map_err(|_| AppError::NotFound)?;
+    let status: MatchStatus = serde_json::from_str(&res)
+        .map_err(|_| AppError::Internal("Failed to parse match status"))?;
+
+    Ok(Json(status))
+}
+
+// For now this allows only playing against system bots
+async fn get_system_bots(
+    State(state): State<Arc<AppState>>,
+    session: SessionUser,
+) -> AppResult<Json<Vec<BotSummary>>>
+{
+    let system_bots: Vec<BotSummary> = sqlx::query_as!(BotSummary,r#"SELECT id as "id: uuid::Uuid", name, description, is_active, is_public, is_valid FROM bots WHERE user_id is NULL"#).fetch_all(&state.sqlite_pool).await?;
+    Ok(Json(system_bots))
+}
+
+async fn play_bot(
+    State(state): State<Arc<AppState>>,
+    session: SessionUser,
+    Json(json): Json<MatchRequest>,
+) -> AppResult<Response>
+{
+    let user_bot = sqlx::query_as!(BotSummary, r#"SELECT id as "id: uuid::Uuid", name, description, is_active, is_public, is_valid FROM bots WHERE id = ? AND user_id = ?"#, &json.player_bot_id, &session.user_id).fetch_one(&state.sqlite_pool).await?;
+    println!("User bot found");
+    if !user_bot.is_valid {
+        return Err(AppError::NotFound);
+    }
+
+    let system_bot = sqlx::query_as!(BotSummary, r#"SELECT id as "id: uuid::Uuid", name, description, is_active, is_public, is_valid FROM bots WHERE id = ? AND user_id is NULL"#, &json.opponent_bot_id).fetch_one(&state.sqlite_pool).await?;
+    println!("System bot found");
+    
+    let match_uuid = Uuid::new_v4();
+    let match_id = format!("match_{}", match_uuid);
+
+    let job: Job = Job::Match { match_id:  match_id.clone(), bot1_id: user_bot.id.unwrap().to_string(), bot2_id: system_bot.id.unwrap().to_string() };
+
+    let status = MatchStatus::Pending;
+
+    let mut redis_conn: redis::aio::MultiplexedConnection = state.redis_con.clone();
+    let _: () = redis_conn
+        .set_ex(
+            &match_id,
+            serde_json::to_string(&status)
+                .map_err(|_| AppError::Internal("Failed to serialize job_status to json"))?,
+            600,
+        )
+        .await
+        .map_err(|_| AppError::Internal("Redis failed"))?;
+    let _: () = redis_conn
+        .lpush(
+            "job_queue",
+            serde_json::to_string(&job)
+                .map_err(|_| AppError::Internal("Failed to serialize job to json"))?,
+        )
+        .await
+        .map_err(|_| AppError::Internal("Redis failed"))?;
+
+    Ok((StatusCode::ACCEPTED, Json(json!({"match_id": match_id}))).into_response())
+}
+
 pub fn bots_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/", get(get_user_bots).post(register_bot))
@@ -223,4 +297,15 @@ pub fn bots_routes() -> Router<Arc<AppState>> {
         )
         .route("/{id}/validate", post(validate_bot))
         .route("/{id}/status", get(get_job_status))
+        .route("/system-bots", get(get_system_bots))
+        .route("/play", post(play_bot))
+        .route("/match/{match_id}", get(get_match_status))
 }
+
+// New routes for new feature
+// Option for user to trigger a match
+// First implement selection from predefined bots (random, greedy)
+// Routes required:
+// /play/ - (own_bot_id, system_bot_id)
+// get playable bots - (return list of bots from system database)
+// /watch/ connect to the soc ket or somethign

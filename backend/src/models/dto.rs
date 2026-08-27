@@ -75,3 +75,18 @@ pub enum ValidationStatus {
     Validated,
     Failed { reason: String },
 }
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(tag = "status")]
+pub enum MatchStatus {
+    Pending,
+    Running,
+    Finished {winner: String},
+    Failed {reason: String}
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct MatchRequest{
+    pub player_bot_id: Uuid,
+    pub opponent_bot_id: Uuid
+}
