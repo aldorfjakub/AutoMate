@@ -1,5 +1,14 @@
 import { API_BASE, parseApiError } from "../api";
-import type { BotInfo, BotSummary, NewBotRequest, ValidateBotResponse, ValidationStatus } from "$lib/types";
+import type {
+	BotInfo,
+	BotSummary,
+	MatchRequest,
+	MatchStatus,
+	NewBotRequest,
+	PlayMatchResponse,
+	ValidateBotResponse,
+	ValidationStatus
+} from "$lib/types";
 
 export class ApiError extends Error {
 	status: number;
@@ -59,4 +68,16 @@ export function validateBot(id: string): Promise<ValidateBotResponse> {
 // The status endpoint is keyed by the job_id returned from validateBot, not the bot id.
 export function getValidationStatus(jobId: string): Promise<ValidationStatus> {
 	return request<ValidationStatus>(`/api/bots/${jobId}/status`);
+}
+
+export function listSystemBots(): Promise<BotSummary[]> {
+	return request<BotSummary[]>("/api/bots/system-bots");
+}
+
+export function playMatch(req: MatchRequest): Promise<PlayMatchResponse> {
+	return request<PlayMatchResponse>("/api/bots/play", json("POST", req));
+}
+
+export function getMatchStatus(matchId: string): Promise<MatchStatus> {
+	return request<MatchStatus>(`/api/bots/match/${matchId}`);
 }

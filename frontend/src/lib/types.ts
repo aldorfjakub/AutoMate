@@ -34,3 +34,18 @@ export type ValidationStatus =
 	| { status: "Running" }
 	| { status: "Validated" }
 	| { status: "Failed"; reason: string };
+
+export type MatchStatus =
+	| { status: "Pending" }
+	| { status: "Running" }
+	| { status: "Finished"; winner: string }
+	| { status: "Failed"; reason: string };
+
+export interface MatchRequest {
+	player_bot_id: string;
+	opponent_bot_id: string;
+}
+
+export interface PlayMatchResponse {
+	match_id: string;
+}

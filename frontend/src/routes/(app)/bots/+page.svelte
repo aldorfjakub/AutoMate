@@ -6,7 +6,7 @@
 	import { checkAuth } from "$lib/auth.svelte";
 	import { deleteBot, listBots, validateBot, getValidationStatus, ApiError } from "$lib/api/bots";
 	import type { BotSummary } from "$lib/types";
-	import { Bot, Code2, Trash2, Pencil, Plus, LoaderCircle } from "lucide-svelte";
+	import { Bot, Code2, Trash2, Pencil, Plus, LoaderCircle, Swords } from "lucide-svelte";
 
 	type JobState = {
 		jobId: string;
@@ -163,6 +163,11 @@
 									<Button variant="outline" size="sm" onclick={() => handleValidate(bot)}>
 										Validate
 									</Button>
+								{/if}
+								{#if bot.is_valid}
+									<a href={`/bots/play?bot=${bot.id}`} aria-label="Play">
+										<Button variant="ghost" size="icon-sm"><Swords class="h-4 w-4" /></Button>
+									</a>
 								{/if}
 								<a href={`/bots/${bot.id}/edit`} aria-label="Edit">
 									<Button variant="ghost" size="icon-sm"><Pencil class="h-4 w-4" /></Button>
