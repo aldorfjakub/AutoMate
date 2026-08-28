@@ -8,7 +8,9 @@ use std::{
 use dotenvy::dotenv;
 use redis::{AsyncCommands, AsyncConnectionConfig, Client, aio::MultiplexedConnection};
 use serde::{Deserialize, Serialize};
-use shakmaty::{Chess, EnPassantMode, KnownOutcome, Outcome, Position, fen::Fen, uci::UciMove};
+use shakmaty::{
+    Chess, EnPassantMode, KnownOutcome, Outcome, Position, fen::Fen, san::San, uci::UciMove,
+};
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
@@ -35,8 +37,8 @@ pub enum Job {
     },
     Match {
         match_id: String,
-        bot1_id: String,
-        bot2_id: String,
+        white_bot_id: String,
+        black_bot_id: String,
     },
 }
 
@@ -108,21 +110,21 @@ async fn main() {
                     }
                     Job::Match {
                         match_id,
-                        bot1_id,
-                        bot2_id,
+                        white_bot_id,
+                        black_bot_id,
                     } => {
-                        let bot1_uuid = match Uuid::from_str(&bot1_id) {
+                        let white_bot_id = match Uuid::from_str(&white_bot_id) {
                             Ok(uuid) => uuid,
                             Err(err) => {
-                                eprintln!("Invalid bot UUID '{bot1_id}': {err}");
+                                eprintln!("Invalid bot UUID '{white_bot_id}': {err}");
                                 continue;
                             }
                         };
 
-                        let bot2_uuid = match Uuid::from_str(&bot2_id) {
+                        let black_bot_id = match Uuid::from_str(&black_bot_id) {
                             Ok(uuid) => uuid,
                             Err(err) => {
-                                eprintln!("Invalid bot UUID '{bot2_id}': {err}");
+                                eprintln!("Invalid bot UUID '{black_bot_id}': {err}");
                                 continue;
                             }
                         };
@@ -130,7 +132,8 @@ async fn main() {
                         let pool_copy = db_pool.clone();
 
                         tokio::spawn(async move {
-                            play_match(&match_id, bot1_uuid, bot2_uuid, pool_copy, conn_copy).await;
+                            play_match(&match_id, white_bot_id, black_bot_id, pool_copy, conn_copy)
+                                .await;
                         });
                     }
                     _ => {
@@ -178,6 +181,107 @@ async fn publish_match_status(
 ) {
     let json = serde_json::to_string(&status).expect("serialize ValidationStatus");
     let _: Result<(), redis::RedisError> = redis_conn.set_ex(job_id, json, 600).await;
+}
+
+enum MatchEndReason {
+    Checkmate,
+    Draw,
+    IllegalMove,
+    Timeout,
+    WriteError,
+    InvalidOutput,
+}
+
+impl MatchEndReason {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Checkmate => "checkmate",
+            Self::Draw => "draw",
+            Self::IllegalMove => "illegal_move",
+            Self::Timeout => "timeout",
+            Self::WriteError => "write_error",
+            Self::InvalidOutput => "invalid_output",
+        }
+    }
+}
+
+struct MatchConclusion {
+    winner_color: Option<&'static str>,
+    win_reason: &'static str,
+    pgn: String,
+    error_message: Option<String>,
+}
+
+async fn conclude_match(db_pool: &SqlitePool, match_uuid: Uuid, conclusion: &MatchConclusion) {
+    let _ = sqlx::query!(
+        r#"UPDATE matches SET
+             match_status = 'finished',
+             winner_color = ?,
+             win_reason = ?,
+             pgn = ?,
+             error_message = ?,
+             completed_at = CURRENT_TIMESTAMP
+           WHERE id = ?"#,
+        conclusion.winner_color,
+        conclusion.win_reason,
+        conclusion.pgn,
+        conclusion.error_message,
+        match_uuid,
+    )
+    .execute(db_pool)
+    .await;
+}
+
+fn build_pgn(white_name: &str, black_name: &str, result: &str, moves: &[String]) -> String {
+    let mut pgn = format!(
+        "[Event \"?\"]\n[White \"{white_name}\"]\n[Black \"{black_name}\"]\n[Result \"{result}\"]\n\n"
+    );
+    for (idx, chunk) in moves.chunks(2).enumerate() {
+        if idx > 0 {
+            pgn.push('\n');
+        }
+        pgn.push_str(&format!("{}. {}", idx + 1, chunk.join(" ")));
+    }
+    pgn
+}
+
+fn result_for_color(winner_color: Option<&str>) -> &'static str {
+    match winner_color {
+        Some("white") => "1-0",
+        Some("black") => "0-1",
+        _ => "1/2-1/2",
+    }
+}
+
+fn bot_failure_winner(
+    current_bot_id: Option<Uuid>,
+    white_bot_id: Uuid,
+    black_bot_id: Uuid,
+) -> (&'static str, Uuid) {
+    if current_bot_id == Some(white_bot_id) {
+        ("black", black_bot_id)
+    } else {
+        ("white", white_bot_id)
+    }
+}
+
+async fn finish_match(
+    db_pool: &SqlitePool,
+    redis_conn: &mut MultiplexedConnection,
+    match_id: &str,
+    match_uuid: Uuid,
+    redis_winner: String,
+    conclusion: MatchConclusion,
+) {
+    publish_match_status(
+        redis_conn,
+        match_id,
+        MatchStatus::Finished {
+            winner: redis_winner,
+        },
+    )
+    .await;
+    conclude_match(db_pool, match_uuid, &conclusion).await;
 }
 
 struct PreparedBot {
@@ -307,12 +411,14 @@ async fn kill_bot(prepared: &mut PreparedBot) {
 
 async fn play_match(
     match_id: &str,
-    bot1_id: Uuid,
-    bot2_id: Uuid,
+    white_bot_id: Uuid,
+    black_bot_id: Uuid,
     db_pool: SqlitePool,
     mut redis_conn: MultiplexedConnection,
 ) {
-    let bot1_info = match sqlx::query_as!(BotInfo,r#"SELECT id as "id: uuid::Uuid", name, description, is_active, is_public, source_code, is_valid FROM bots WHERE id = ?"#, &bot1_id).fetch_optional(&db_pool).await
+    let match_uuid = Uuid::from_str(&match_id).expect("Failed to make uuid out of match_id");
+    let match_id = format!("match_{}", match_id);
+    let white_bot_info = match sqlx::query_as!(BotInfo,r#"SELECT id as "id: uuid::Uuid", name, description, is_active, is_public, source_code, is_valid FROM bots WHERE id = ?"#, &white_bot_id).fetch_optional(&db_pool).await
     {
         Ok(Some(bot1)) => bot1,
         Ok(_) => {
@@ -325,7 +431,7 @@ async fn play_match(
             return;
         }
     };
-    let bot1_source_code = match bot1_info.source_code {
+    let white_bot_source_code = match white_bot_info.source_code {
         Some(code) => code,
         None => {
             publish_match_status(
@@ -340,7 +446,7 @@ async fn play_match(
         }
     };
 
-    let bot2_info: BotInfo = match sqlx::query_as!(BotInfo,r#"SELECT id as "id: uuid::Uuid", name, description, is_active, is_public, source_code, is_valid FROM bots WHERE id = ?"#, &bot2_id).fetch_optional(&db_pool).await
+    let black_bot_info: BotInfo = match sqlx::query_as!(BotInfo,r#"SELECT id as "id: uuid::Uuid", name, description, is_active, is_public, source_code, is_valid FROM bots WHERE id = ?"#, &black_bot_id).fetch_optional(&db_pool).await
     {
         Ok(Some(bot2)) => bot2,
         Ok(_) => {
@@ -353,7 +459,7 @@ async fn play_match(
             return;
         }
     };
-    let bot2_source_code = match bot2_info.source_code {
+    let black_bot_source_code = match black_bot_info.source_code {
         Some(code) => code,
         None => {
             publish_match_status(
@@ -370,66 +476,83 @@ async fn play_match(
 
     println!(
         "Creating docker for bot 1 of size: {}",
-        bot1_source_code.len()
+        white_bot_source_code.len()
     );
 
-    let mut bot1 = match prepare_bot(&bot1_source_code, bot1_info.id).await {
+    let mut white_bot = match prepare_bot(&white_bot_source_code, white_bot_info.id).await {
         Ok(bot) => bot,
         Err(reason) => {
+            let _ = sqlx::query!(
+                "UPDATE matches SET match_status = 'failed', error_message = ? WHERE id = ?",
+                format!("Bot: {} failed to load: {}", white_bot_info.name, reason),
+                match_uuid
+            )
+            .execute(&db_pool)
+            .await;
             publish_match_status(&mut redis_conn, &match_id, MatchStatus::Failed { reason }).await;
             return;
         }
     };
 
-    let mut bot2 = match prepare_bot(&bot2_source_code, bot2_info.id).await {
+    let mut black_bot = match prepare_bot(&black_bot_source_code, black_bot_info.id).await {
         Ok(bot) => bot,
         Err(reason) => {
-            kill_bot(&mut bot1).await;
+            kill_bot(&mut white_bot).await;
+            let _ = sqlx::query!(
+                "UPDATE matches SET match_status = 'failed', error_message = ? WHERE id = ?",
+                format!("Bot: {} failed to load: {}", black_bot_info.name, reason),
+                match_uuid
+            )
+            .execute(&db_pool)
+            .await;
             publish_match_status(&mut redis_conn, &match_id, MatchStatus::Failed { reason }).await;
             return;
         }
     };
 
-    // Decide who is white
-    // Play the matches until it yields result
+    let _ = sqlx::query!(
+        "UPDATE matches SET match_status = 'playing' WHERE id = ?",
+        match_uuid
+    )
+    .execute(&db_pool)
+    .await;
 
     let mut pos = Chess::default();
+    let mut moves: Vec<String> = Vec::new();
 
-    //let mut winner: Option<Uuid> = None;
-    let white: Option<Uuid>;
-    let mut current_bot = match rand::random_bool(0.5) {
-        true => {
-            white = bot1_info.id;
-            &mut bot1
-        }
-        false => {
-            white = bot2_info.id;
-            &mut bot2
-        }
-    };
+    let mut current_bot = &mut white_bot;
     loop {
         match pos.outcome() {
             Outcome::Known(KnownOutcome::Decisive { winner }) => {
                 if winner.is_white() {
-                    publish_match_status(
+                    let pgn = build_pgn(&white_bot_info.name, &black_bot_info.name, "1-0", &moves);
+                    finish_match(
+                        &db_pool,
                         &mut redis_conn,
-                        match_id,
-                        MatchStatus::Finished {
-                            winner: white.unwrap_or_default().to_string(),
+                        &match_id,
+                        match_uuid,
+                        white_bot_id.to_string(),
+                        MatchConclusion {
+                            winner_color: Some("white"),
+                            win_reason: MatchEndReason::Checkmate.as_str(),
+                            pgn,
+                            error_message: None,
                         },
                     )
                     .await;
                 } else {
-                    let black = if bot1_info.id == white {
-                        bot2.bot_id
-                    } else {
-                        bot1.bot_id
-                    };
-                    publish_match_status(
+                    let pgn = build_pgn(&white_bot_info.name, &black_bot_info.name, "0-1", &moves);
+                    finish_match(
+                        &db_pool,
                         &mut redis_conn,
-                        match_id,
-                        MatchStatus::Finished {
-                            winner: black.unwrap_or_default().to_string(),
+                        &match_id,
+                        match_uuid,
+                        black_bot_id.to_string(),
+                        MatchConclusion {
+                            winner_color: Some("black"),
+                            win_reason: MatchEndReason::Checkmate.as_str(),
+                            pgn,
+                            error_message: None,
                         },
                     )
                     .await;
@@ -437,15 +560,26 @@ async fn play_match(
                 break;
             }
             Outcome::Known(KnownOutcome::Draw) => {
-                publish_match_status(
+                let pgn = build_pgn(
+                    &white_bot_info.name,
+                    &black_bot_info.name,
+                    "1/2-1/2",
+                    &moves,
+                );
+                finish_match(
+                    &db_pool,
                     &mut redis_conn,
-                    match_id,
-                    MatchStatus::Finished {
-                        winner: String::new(),
+                    &match_id,
+                    match_uuid,
+                    String::new(),
+                    MatchConclusion {
+                        winner_color: None,
+                        win_reason: MatchEndReason::Draw.as_str(),
+                        pgn,
+                        error_message: None,
                     },
                 )
                 .await;
-
                 break;
             }
             Outcome::Unknown => (),
@@ -454,17 +588,25 @@ async fn play_match(
         if current_bot.stdin.write_all(fen.as_bytes()).await.is_err()
             || current_bot.stdin.write_all(b"\n").await.is_err()
         {
-            publish_match_status(
+            let (winner_color, redis_winner) =
+                bot_failure_winner(current_bot.bot_id, white_bot_id, black_bot_id);
+            let pgn = build_pgn(
+                &white_bot_info.name,
+                &black_bot_info.name,
+                result_for_color(Some(winner_color)),
+                &moves,
+            );
+            finish_match(
+                &db_pool,
                 &mut redis_conn,
-                match_id,
-                MatchStatus::Finished {
-                    winner: (if bot1_info.id == current_bot.bot_id {
-                        bot2.bot_id
-                    } else {
-                        bot1.bot_id
-                    })
-                    .unwrap_or_default()
-                    .to_string(),
+                &match_id,
+                match_uuid,
+                redis_winner.to_string(),
+                MatchConclusion {
+                    winner_color: Some(winner_color),
+                    win_reason: MatchEndReason::WriteError.as_str(),
+                    pgn,
+                    error_message: Some("failed to write position to bot".to_string()),
                 },
             )
             .await;
@@ -475,18 +617,26 @@ async fn play_match(
 
         let uci = match read_move(&mut current_bot.reader).await {
             Ok(u) => u,
-            Err(_) => {
-                publish_match_status(
+            Err(reason) => {
+                let (winner_color, redis_winner) =
+                    bot_failure_winner(current_bot.bot_id, white_bot_id, black_bot_id);
+                let pgn = build_pgn(
+                    &white_bot_info.name,
+                    &black_bot_info.name,
+                    result_for_color(Some(winner_color)),
+                    &moves,
+                );
+                finish_match(
+                    &db_pool,
                     &mut redis_conn,
-                    match_id,
-                    MatchStatus::Finished {
-                        winner: (if bot1_info.id == current_bot.bot_id {
-                            bot2.bot_id
-                        } else {
-                            bot1.bot_id
-                        })
-                        .unwrap_or_default()
-                        .to_string(),
+                    &match_id,
+                    match_uuid,
+                    redis_winner.to_string(),
+                    MatchConclusion {
+                        winner_color: Some(winner_color),
+                        win_reason: MatchEndReason::Timeout.as_str(),
+                        pgn,
+                        error_message: Some(reason),
                     },
                 )
                 .await;
@@ -498,41 +648,58 @@ async fn play_match(
         match uci.parse::<UciMove>() {
             Ok(uci_move) => match uci_move.to_move(&pos) {
                 Ok(m) => {
+                    let san = San::from_move(&pos, m).to_string();
                     pos.play_unchecked(m);
+                    moves.push(san);
                 }
                 Err(_) => {
                     println!("invalid move from worker: {uci}");
-                    publish_match_status(
+                    let (winner_color, redis_winner) =
+                        bot_failure_winner(current_bot.bot_id, white_bot_id, black_bot_id);
+                    let pgn = build_pgn(
+                        &white_bot_info.name,
+                        &black_bot_info.name,
+                        result_for_color(Some(winner_color)),
+                        &moves,
+                    );
+                    finish_match(
+                        &db_pool,
                         &mut redis_conn,
-                        match_id,
-                        MatchStatus::Finished {
-                            winner: (if bot1_info.id == current_bot.bot_id {
-                                bot2.bot_id
-                            } else {
-                                bot1.bot_id
-                            })
-                            .unwrap_or_default()
-                            .to_string(),
+                        &match_id,
+                        match_uuid,
+                        redis_winner.to_string(),
+                        MatchConclusion {
+                            winner_color: Some(winner_color),
+                            win_reason: MatchEndReason::IllegalMove.as_str(),
+                            pgn,
+                            error_message: Some(format!("illegal move: {uci}")),
                         },
                     )
                     .await;
-
                     break;
                 }
             },
             Err(_) => {
                 println!("unparseable move from worker: {uci}");
-                publish_match_status(
+                let (winner_color, redis_winner) =
+                    bot_failure_winner(current_bot.bot_id, white_bot_id, black_bot_id);
+                let pgn = build_pgn(
+                    &white_bot_info.name,
+                    &black_bot_info.name,
+                    result_for_color(Some(winner_color)),
+                    &moves,
+                );
+                finish_match(
+                    &db_pool,
                     &mut redis_conn,
-                    match_id,
-                    MatchStatus::Finished {
-                        winner: (if bot1_info.id == current_bot.bot_id {
-                            bot2.bot_id
-                        } else {
-                            bot1.bot_id
-                        })
-                        .unwrap_or_default()
-                        .to_string(),
+                    &match_id,
+                    match_uuid,
+                    redis_winner.to_string(),
+                    MatchConclusion {
+                        winner_color: Some(winner_color),
+                        win_reason: MatchEndReason::InvalidOutput.as_str(),
+                        pgn,
+                        error_message: Some(format!("unparseable move: {uci}")),
                     },
                 )
                 .await;
@@ -540,20 +707,17 @@ async fn play_match(
             }
         }
 
-        if current_bot
-            .bot_id
-            .is_some_and(|id| id == bot1.bot_id.unwrap())
-        {
-            current_bot = &mut bot2;
+        if current_bot.bot_id == Some(white_bot_id) {
+            current_bot = &mut black_bot;
         } else {
-            current_bot = &mut bot1;
+            current_bot = &mut white_bot;
         }
     }
 
-    kill_bot(&mut bot1).await;
-    kill_bot(&mut bot2).await;
+    kill_bot(&mut white_bot).await;
+    kill_bot(&mut black_bot).await;
 
-    let _ = (&bot1, &bot2);
+    let _ = (&white_bot, &black_bot);
 }
 
 async fn read_move(reader: &mut BufReader<ChildStdout>) -> Result<String, String> {
