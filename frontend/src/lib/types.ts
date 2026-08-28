@@ -49,3 +49,19 @@ export interface MatchRequest {
 export interface PlayMatchResponse {
 	match_id: string;
 }
+
+export interface Match {
+	id: string;
+	white_bot_id: string;
+	black_bot_id: string;
+	match_status: string;
+	is_ranked: boolean;
+	winner_color: string | null;
+	win_reason: string | null;
+	pgn: string | null;
+	white_elo_change: number | null;
+	black_elo_change: number | null;
+	error_message: string | null;
+	created_at: string | null;
+	completed_at: string | null;
+}

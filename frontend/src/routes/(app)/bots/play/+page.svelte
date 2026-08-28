@@ -5,9 +5,10 @@
 	import * as Card from "$lib/components/ui/card";
 	import { Label } from "$lib/components/ui/label";
 	import { checkAuth } from "$lib/auth.svelte";
-	import { listBots, listSystemBots, playMatch, getMatchStatus, ApiError } from "$lib/api/bots";
-	import type { BotSummary, MatchStatus } from "$lib/types";
-	import { Swords, LoaderCircle } from "lucide-svelte";
+	import { listBots, listSystemBots, playMatch, getMatchStatus, getMatch, ApiError } from "$lib/api/bots";
+	import type { BotSummary, Match, MatchStatus } from "$lib/types";
+	import MatchReplay from "$lib/components/match-replay.svelte";
+	import { Swords, LoaderCircle, RotateCcw } from "lucide-svelte";
 
 	const POLL_INTERVAL_MS = 2000;
 	const MAX_ATTEMPTS = 60;
@@ -26,6 +27,9 @@
 	let matchStatus = $state<MatchStatus | null>(null);
 	let matchError = $state<string | null>(null);
 	let matchLabel = $state("");
+	let matchDetail = $state<Match | null>(null);
+	let detailError = $state<string | null>(null);
+	let loadingDetail = $state(false);
 	let attempts = 0;
 	let timer: ReturnType<typeof setInterval> | undefined;
 
@@ -33,6 +37,9 @@
 
 	const playerBot = $derived(userBots.find((b) => b.id === playerBotId));
 	const opponentBot = $derived(systemBots.find((b) => b.id === opponentBotId));
+	const botNames = $derived(
+		Object.fromEntries([...userBots, ...systemBots].map((b) => [b.id, b.name]))
+	);
 	const winnerName = $derived.by(() => {
 		const status = matchStatus;
 		if (status?.status !== "Finished" || !status.winner) return "";
@@ -84,11 +91,26 @@
 		}
 	}
 
+	async function loadReplay() {
+		if (!matchId || loadingDetail) return;
+		loadingDetail = true;
+		detailError = null;
+		try {
+			matchDetail = await getMatch(matchId);
+		} catch (e) {
+			detailError = e instanceof ApiError ? e.message : "Could not load the match replay.";
+		} finally {
+			loadingDetail = false;
+		}
+	}
+
 	async function handlePlay() {
 		if (!playerBotId || !opponentBotId || starting || polling) return;
 		starting = true;
 		matchError = null;
 		matchStatus = null;
+		matchDetail = null;
+		detailError = null;
 		try {
 			const { match_id } = await playMatch({ player_bot_id: playerBotId, opponent_bot_id: opponentBotId });
 			matchId = match_id;
@@ -204,7 +226,24 @@
 					{#if matchError}
 						<p class="mt-2 text-sm text-destructive">{matchError}</p>
 					{/if}
+					{#if matchDetail}
+						<div class="mt-4 border-t border-border pt-4">
+							{#if detailError}
+								<p class="text-sm text-destructive">{detailError}</p>
+							{:else}
+								<MatchReplay match={matchDetail} {botNames} loading={loadingDetail} />
+							{/if}
+						</div>
+					{/if}
 				</Card.Content>
+				{#if matchStatus?.status === "Finished" && !matchDetail}
+					<Card.Footer>
+						<Button variant="outline" size="sm" onclick={loadReplay} disabled={loadingDetail}>
+							{#if loadingDetail}<LoaderCircle class="h-4 w-4 animate-spin" />{/if}
+							<RotateCcw class="h-4 w-4" /> View replay
+						</Button>
+					</Card.Footer>
+				{/if}
 			</Card.Root>
 		{/if}
 	{/if}

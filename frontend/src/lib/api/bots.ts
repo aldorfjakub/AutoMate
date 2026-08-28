@@ -2,6 +2,7 @@ import { API_BASE, parseApiError } from "../api";
 import type {
 	BotInfo,
 	BotSummary,
+	Match,
 	MatchRequest,
 	MatchStatus,
 	NewBotRequest,
@@ -79,5 +80,9 @@ export function playMatch(req: MatchRequest): Promise<PlayMatchResponse> {
 }
 
 export function getMatchStatus(matchId: string): Promise<MatchStatus> {
-	return request<MatchStatus>(`/api/bots/match/${matchId}`);
+	return request<MatchStatus>(`/api/bots/match/${matchId}/status`);
+}
+
+export function getMatch(matchId: string): Promise<Match> {
+	return request<Match>(`/api/bots/match/${matchId}`);
 }
