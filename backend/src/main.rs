@@ -67,7 +67,13 @@ def evaluate(board):
         score += val if piece.color == chess.WHITE else -val
     return score
 
-def get_best_move(board):
+def get_chess_move(fen: str) -> str:
+    board = chess.Board(fen)
+    
+    # Handle terminal state
+    if board.is_game_over() or not any(board.legal_moves):
+        return None
+
     best_moves = []
     is_white = board.turn == chess.WHITE
     best_score = float('-inf') if is_white else float('inf')
@@ -83,14 +89,15 @@ def get_best_move(board):
         elif score == best_score:
             best_moves.append(move)
 
-    return random.choice(best_moves)"#;
+    chosen_move = random.choice(best_moves)
+    return chosen_move.uci()"#;
 
 // TEMPORARY
 async fn add_system_bots(db_pool: SqlitePool) {
     let new_id = Uuid::from_u128(0xa1a2a3a4b1b2c1c2d1d2d3d4d5d6d7d8u128);
     let _ = sqlx::query!("INSERT INTO bots (id, name, description, source_code, is_active, is_public, is_system, is_valid) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", new_id, "Random bot", "All moves are pure random", RANDOM_BOT,true, true, true, true).execute(&db_pool).await;
-    let new_id = Uuid::from_u128(0xa1a2a3a4b1b2c1c2d1d2d3d4d5d6d7d7u128);
-    let _ = sqlx::query!("INSERT INTO bots (id, name, description, source_code, is_active, is_public, is_system, is_valid) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", new_id, "Greedy bot", "Takes if he can", GREEDY_BOT,true, true, true, true).execute(&db_pool).await;
+    let new_id = Uuid::from_u128(0xa1a2a3a4b1b2c1c2d1d2d3d4d5d6d7d6u128);
+    let _ = sqlx::query!("INSERT INTO bots (id, name, description, source_code, is_active, is_public, is_system, is_valid) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", new_id, "Greedy bot 2", "Takes if he can", GREEDY_BOT,true, true, true, true).execute(&db_pool).await;
 }
 
 #[tokio::main]

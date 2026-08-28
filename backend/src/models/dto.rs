@@ -61,9 +61,9 @@ pub enum Job {
     },
     Match {
         match_id: String,
-        bot1_id: String,
-        bot2_id: String,
-    }
+        white_bot_id: String,
+        black_bot_id: String,
+    },
 }
 
 

@@ -11,12 +11,18 @@ use reqwest::StatusCode;
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::{extract::SessionUser, handlers::user, models::dto::{MatchRequest, MatchStatus}};
-use crate::models::dto::{BotInfo, BotSummary, NewBotRequest};
+use crate::models::{
+    dto::{BotInfo, BotSummary, NewBotRequest},
+    matches::Match,
+};
 use crate::state::AppState;
 use crate::{
     error::{AppError, AppResult},
     models::dto::{Job, ValidationStatus},
+};
+use crate::{
+    extract::SessionUser,
+    models::dto::{MatchRequest, MatchStatus},
 };
 
 const MIN_NAME_LEN: usize = 5;
@@ -214,7 +220,6 @@ async fn get_job_status(
     Ok(Json(status))
 }
 
-
 // TEMPORARY
 // TODO replace both get_math_status and get_job_status with single function or think of better solution
 async fn get_match_status(
@@ -222,10 +227,11 @@ async fn get_match_status(
     Path(match_id): Path<String>,
     session: SessionUser,
 ) -> AppResult<Json<MatchStatus>> {
+    let redis_key = format!("match_{}", match_id);
     let mut redis_conn: redis::aio::MultiplexedConnection = state.redis_con.clone();
 
     let res: String = redis_conn
-        .get(match_id)
+        .get(redis_key)
         .await
         .map_err(|_| AppError::NotFound)?;
     let status: MatchStatus = serde_json::from_str(&res)
@@ -234,12 +240,37 @@ async fn get_match_status(
     Ok(Json(status))
 }
 
+async fn get_match_result(
+    State(state): State<Arc<AppState>>,
+    Path(match_id): Path<Uuid>,
+    session: SessionUser,
+) -> AppResult<Json<Match>> {
+    let m = sqlx::query_as!(
+        Match,
+        r#"
+        SELECT id as "id: uuid::Uuid",
+            white_bot_id as "white_bot_id: Uuid",
+            black_bot_id as "black_bot_id: Uuid",
+               match_status, is_ranked, winner_color, win_reason, pgn,
+               white_elo_change, black_elo_change, error_message,
+               created_at, completed_at
+        FROM matches
+        WHERE id = ?
+    "#,
+        &match_id
+    )
+    .fetch_optional(&state.sqlite_pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+
+    Ok(Json(m))
+}
+
 // For now this allows only playing against system bots
 async fn get_system_bots(
     State(state): State<Arc<AppState>>,
     session: SessionUser,
-) -> AppResult<Json<Vec<BotSummary>>>
-{
+) -> AppResult<Json<Vec<BotSummary>>> {
     let system_bots: Vec<BotSummary> = sqlx::query_as!(BotSummary,r#"SELECT id as "id: uuid::Uuid", name, description, is_active, is_public, is_valid FROM bots WHERE user_id is NULL"#).fetch_all(&state.sqlite_pool).await?;
     Ok(Json(system_bots))
 }
@@ -248,8 +279,7 @@ async fn play_bot(
     State(state): State<Arc<AppState>>,
     session: SessionUser,
     Json(json): Json<MatchRequest>,
-) -> AppResult<Response>
-{
+) -> AppResult<Response> {
     let user_bot = sqlx::query_as!(BotSummary, r#"SELECT id as "id: uuid::Uuid", name, description, is_active, is_public, is_valid FROM bots WHERE id = ? AND user_id = ?"#, &json.player_bot_id, &session.user_id).fetch_one(&state.sqlite_pool).await?;
     println!("User bot found");
     if !user_bot.is_valid {
@@ -258,18 +288,41 @@ async fn play_bot(
 
     let system_bot = sqlx::query_as!(BotSummary, r#"SELECT id as "id: uuid::Uuid", name, description, is_active, is_public, is_valid FROM bots WHERE id = ? AND user_id is NULL"#, &json.opponent_bot_id).fetch_one(&state.sqlite_pool).await?;
     println!("System bot found");
-    
-    let match_uuid = Uuid::new_v4();
-    let match_id = format!("match_{}", match_uuid);
 
-    let job: Job = Job::Match { match_id:  match_id.clone(), bot1_id: user_bot.id.unwrap().to_string(), bot2_id: system_bot.id.unwrap().to_string() };
+    let match_uuid = Uuid::new_v4();
+    let match_redis_id = format!("match_{}", match_uuid);
+    // match_status will be pending, is_ranked will be false
+    let white = if rand::random_bool(0.5) {
+        json.player_bot_id
+    } else {
+        json.opponent_bot_id
+    };
+    let black = if white == json.player_bot_id {
+        json.opponent_bot_id
+    } else {
+        json.player_bot_id
+    };
+
+    let _ = sqlx::query!(
+        "INSERT INTO matches (id, white_bot_id, black_bot_id) VALUES (?, ?, ?)",
+        match_uuid,
+        &white,
+        &black
+    )
+    .execute(&state.sqlite_pool)
+    .await?;
+    let job: Job = Job::Match {
+        match_id: match_uuid.to_string(),
+        white_bot_id: white.to_string(),
+        black_bot_id: black.to_string(),
+    };
 
     let status = MatchStatus::Pending;
 
     let mut redis_conn: redis::aio::MultiplexedConnection = state.redis_con.clone();
     let _: () = redis_conn
         .set_ex(
-            &match_id,
+            &match_redis_id,
             serde_json::to_string(&status)
                 .map_err(|_| AppError::Internal("Failed to serialize job_status to json"))?,
             600,
@@ -285,7 +338,11 @@ async fn play_bot(
         .await
         .map_err(|_| AppError::Internal("Redis failed"))?;
 
-    Ok((StatusCode::ACCEPTED, Json(json!({"match_id": match_id}))).into_response())
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(json!({"match_id": &match_uuid.to_string()})),
+    )
+        .into_response())
 }
 
 pub fn bots_routes() -> Router<Arc<AppState>> {
@@ -299,7 +356,8 @@ pub fn bots_routes() -> Router<Arc<AppState>> {
         .route("/{id}/status", get(get_job_status))
         .route("/system-bots", get(get_system_bots))
         .route("/play", post(play_bot))
-        .route("/match/{match_id}", get(get_match_status))
+        .route("/match/{match_id}/status", get(get_match_status))
+        .route("/match/{match_id}", get(get_match_result))
 }
 
 // New routes for new feature
