@@ -5,10 +5,19 @@
 	import * as Card from "$lib/components/ui/card";
 	import { Label } from "$lib/components/ui/label";
 	import { checkAuth } from "$lib/auth.svelte";
-	import { listBots, listSystemBots, playMatch, getMatchStatus, getMatch, ApiError } from "$lib/api/bots";
-	import type { BotSummary, Match, MatchStatus } from "$lib/types";
+	import {
+		listBots,
+		listSystemBots,
+		playMatch,
+		getMatchStatus,
+		getMatch,
+		watchMatchSse,
+		ApiError
+	} from "$lib/api/bots";
+	import type { BotSummary, Match, MatchEvent, MatchStatus } from "$lib/types";
 	import MatchReplay from "$lib/components/match-replay.svelte";
-	import { Swords, LoaderCircle, RotateCcw } from "lucide-svelte";
+	import MatchLive from "$lib/components/match-live.svelte";
+	import { Swords, LoaderCircle, RotateCcw, Radio } from "lucide-svelte";
 
 	const POLL_INTERVAL_MS = 2000;
 	const MAX_ATTEMPTS = 60;
@@ -30,8 +39,15 @@
 	let matchDetail = $state<Match | null>(null);
 	let detailError = $state<string | null>(null);
 	let loadingDetail = $state(false);
+
+	// Live board built from MatchEvent::Move frames while watching.
+	let liveSan = $state<{ san: string; fen: string; move_number: number }[]>([]);
+	let liveFen = $state<string | null>(null);
+	let liveStatus = $state<"live" | "settled" | "idle">("idle");
 	let attempts = 0;
 	let timer: ReturnType<typeof setInterval> | undefined;
+	let closeWatch: (() => void) | undefined;
+	let liveWatchdog: ReturnType<typeof setTimeout> | undefined;
 
 	const playable = $derived(userBots.filter((b) => b.is_valid));
 
@@ -68,6 +84,17 @@
 		polling = false;
 	}
 
+	function clearWatchdog() {
+		if (liveWatchdog) clearTimeout(liveWatchdog);
+		liveWatchdog = undefined;
+	}
+
+	function cleanupWatch() {
+		closeWatch?.();
+		closeWatch = undefined;
+		clearWatchdog();
+	}
+
 	async function pollMatch() {
 		if (!matchId) return;
 		attempts += 1;
@@ -91,6 +118,55 @@
 		}
 	}
 
+	function handleMatchEvent(evt: MatchEvent) {
+		clearWatchdog();
+		if (evt.type === "Move") {
+			liveSan = [...liveSan, { san: evt.san, fen: evt.fen, move_number: evt.move_number }].slice(-300);
+			liveFen = evt.fen;
+		} else if (evt.type === "Finished") {
+			liveStatus = "settled";
+			matchStatus = { status: "Finished", winner: evt.winner };
+			stopPolling();
+		} else if (evt.type === "Failed") {
+			liveStatus = "settled";
+			matchStatus = { status: "Failed", reason: evt.reason };
+			stopPolling();
+		}
+	}
+
+	function startWatch() {
+		cleanupWatch();
+		if (!matchId) return;
+		liveSan = [];
+		liveFen = null;
+		liveStatus = "live";
+		closeWatch = watchMatchSse(
+			matchId,
+			(evt) => {
+				handleMatchEvent(evt);
+				// Once we know the stream is alive, keep it; fallback poll handles missed frames.
+			},
+			() => {
+				stopPolling();
+				matchError = "Live stream disconnected. Falling back to polling.";
+				pollMatch();
+				timer = setInterval(pollMatch, POLL_INTERVAL_MS);
+			}
+		);
+
+		// If no SSE data arrives shortly after connecting (e.g. the backend
+		// currently publishes to a different Redis channel), fall back to polling.
+		liveWatchdog = setTimeout(() => {
+			if (liveFen === null && liveSan.length === 0 && liveStatus === "live") {
+				cleanupWatch();
+				liveStatus = "settled";
+				stopPolling();
+				pollMatch();
+				timer = setInterval(pollMatch, POLL_INTERVAL_MS);
+			}
+		}, 5000);
+	}
+
 	async function loadReplay() {
 		if (!matchId || loadingDetail) return;
 		loadingDetail = true;
@@ -111,12 +187,16 @@
 		matchStatus = null;
 		matchDetail = null;
 		detailError = null;
+		liveSan = [];
+		liveFen = null;
+		liveStatus = "idle";
 		try {
 			const { match_id } = await playMatch({ player_bot_id: playerBotId, opponent_bot_id: opponentBotId });
 			matchId = match_id;
 			matchLabel = `${playerBot?.name ?? "Your bot"} vs ${opponentBot?.name ?? "System bot"}`;
 			attempts = 0;
 			polling = true;
+			startWatch();
 			pollMatch();
 			timer = setInterval(pollMatch, POLL_INTERVAL_MS);
 		} catch (e) {
@@ -131,7 +211,10 @@
 		await load();
 	});
 
-	onDestroy(stopPolling);
+	onDestroy(() => {
+		cleanupWatch();
+		stopPolling();
+	});
 </script>
 
 <div class="container mx-auto max-w-4xl space-y-8 p-6">
@@ -190,7 +273,7 @@
 				</div>
 			</Card.Content>
 			<Card.Footer class="justify-between">
-				<span class="text-sm text-muted-foreground">Temporary watch — live streaming comes later.</span>
+				<span class="text-sm text-muted-foreground">Watch the match live as it happens.</span>
 				<Button
 					onclick={handlePlay}
 					disabled={starting || polling || !playerBotId || !opponentBotId}
@@ -207,21 +290,37 @@
 					<Card.Title>Match</Card.Title>
 					<Card.Description>{matchLabel}</Card.Description>
 				</Card.Header>
-				<Card.Content>
-					{#if polling || matchStatus?.status === "Pending" || matchStatus?.status === "Running"}
-						<div class="flex items-center gap-2 text-muted-foreground">
-							<LoaderCircle class="h-4 w-4 animate-spin" /> Match in progress…
+				<Card.Content class="space-y-4">
+					{#if liveStatus === "live" && liveFen && !matchDetail}
+						<div class="flex items-center gap-2 text-primary">
+							<Radio class="h-4 w-4 animate-pulse" />
+							<span class="text-sm font-medium">Live — streaming moves</span>
 						</div>
-					{:else if matchStatus?.status === "Finished"}
-						{#if winnerName}
-							<p class="text-sm">
-								<span class="font-semibold">{winnerName}</span> wins the match.
-							</p>
-						{:else}
-							<p class="text-sm text-muted-foreground">The match ended in a draw.</p>
+						<div class="rounded-lg border border-border bg-muted/20 p-3">
+							<div class="mb-2 flex flex-wrap gap-2 text-sm">
+								<span class="font-medium">{playerBot?.name ?? "White"}</span>
+								<span class="text-muted-foreground">vs</span>
+								<span class="font-medium">{opponentBot?.name ?? "Black"}</span>
+								<span class="text-muted-foreground">· {liveSan.length} move{liveSan.length === 1 ? "" : "s"}</span>
+							</div>
+							<MatchLive fen={liveFen} />
+						</div>
+					{:else}
+						{#if polling || matchStatus?.status === "Pending" || matchStatus?.status === "Running"}
+							<div class="flex items-center gap-2 text-muted-foreground">
+								<LoaderCircle class="h-4 w-4 animate-spin" /> Match in progress…
+							</div>
+						{:else if matchStatus?.status === "Finished"}
+							{#if winnerName}
+								<p class="text-sm">
+									<span class="font-semibold">{winnerName}</span> wins the match.
+								</p>
+							{:else}
+								<p class="text-sm text-muted-foreground">The match ended in a draw.</p>
+							{/if}
+						{:else if matchStatus?.status === "Failed"}
+							<p class="text-sm text-destructive">Failed: {matchStatus.reason}</p>
 						{/if}
-					{:else if matchStatus?.status === "Failed"}
-						<p class="text-sm text-destructive">Failed: {matchStatus.reason}</p>
 					{/if}
 					{#if matchError}
 						<p class="mt-2 text-sm text-destructive">{matchError}</p>

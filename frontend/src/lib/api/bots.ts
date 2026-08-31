@@ -3,6 +3,7 @@ import type {
 	BotInfo,
 	BotSummary,
 	Match,
+	MatchEvent,
 	MatchRequest,
 	MatchStatus,
 	NewBotRequest,
@@ -85,4 +86,33 @@ export function getMatchStatus(matchId: string): Promise<MatchStatus> {
 
 export function getMatch(matchId: string): Promise<Match> {
 	return request<Match>(`/api/bots/match/${matchId}`);
+}
+
+// Realtime match stream. The SSE endpoint sends `event: match` lines whose data
+// is a MatchEvent JSON payload. Returns a close() function; onError is called
+// for non-close transport errors (no events for a while, network drop).
+export function watchMatchSse(
+	matchId: string,
+	onEvent: (event: MatchEvent) => void,
+	onError: () => void
+): () => void {
+	const source = new EventSource(`${API_BASE}/api/bots/match/${matchId}/watch`, {
+		withCredentials: true
+	});
+	source.addEventListener("match", (e) => {
+		try {
+			const event = JSON.parse((e as MessageEvent).data) as MatchEvent;
+			if (event && typeof event === "object" && "type" in event) {
+				onEvent(event);
+			}
+		} catch {
+			// ignore malformed frames
+		}
+	});
+	source.onerror = () => {
+		if (source.readyState === EventSource.CLOSED) return;
+		onError();
+		source.close();
+	};
+	return () => source.close();
 }

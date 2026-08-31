@@ -144,11 +144,13 @@
 		<div class="min-w-0 flex-1 space-y-3">
 			<div class="space-y-1 text-sm">
 				<p class="flex items-center gap-2">
-					<span class="h-3 w-3 rounded-sm border border-border bg-white shadow-sm dark:bg-black"></span>
+					<span class="h-3 w-3 rounded-sm border border-border bg-white shadow-sm" aria-hidden="true"></span>
+					<span class="text-muted-foreground">White</span>
 					{whiteName}
 				</p>
 				<p class="flex items-center gap-2">
-					<span class="h-3 w-3 rounded-sm border border-border bg-black shadow-sm dark:bg-white"></span>
+					<span class="h-3 w-3 rounded-sm border border-border bg-black shadow-sm" aria-hidden="true"></span>
+					<span class="text-muted-foreground">Black</span>
 					{blackName}
 				</p>
 				<p class="pt-1 text-muted-foreground">

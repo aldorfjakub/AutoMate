@@ -1,8 +1,5 @@
 use std::{
-    env::{self},
-    process::Stdio,
-    str::FromStr,
-    time::Duration,
+    env::{self}, f64::consts::E, process::Stdio, str::FromStr, time::Duration,
 };
 
 use dotenvy::dotenv;
@@ -60,6 +57,23 @@ pub enum MatchStatus {
     Running,
     Finished { winner: String },
     Failed { reason: String },
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum MatchEvent {
+    Move {
+        san: String,
+        fen: String,
+        move_number: u32,
+    },
+    Finished {
+        winner: String,
+        reason: String,
+    },
+    Failed {
+        reason: String,
+    },
 }
 
 #[tokio::main]
@@ -281,6 +295,15 @@ async fn finish_match(
         },
     )
     .await;
+
+    let event = MatchEvent::Finished {
+        winner: conclusion.winner_color.unwrap_or("").to_string(),
+        reason: conclusion.win_reason.to_string(),
+    };
+    let json = serde_json::to_string(&event).expect("failed to serialize match event");
+    let _: Result<(), redis::RedisError> = redis_conn
+        .publish(format!("matchStream_{}", match_uuid.to_string()), json)
+        .await;
     conclude_match(db_pool, match_uuid, &conclusion).await;
 }
 
@@ -505,7 +528,12 @@ async fn play_match(
             )
             .execute(&db_pool)
             .await;
-            publish_match_status(&mut redis_conn, &match_id, MatchStatus::Failed { reason }).await;
+            publish_match_status(&mut redis_conn, &match_id, MatchStatus::Failed { reason: reason.clone() }).await;
+            let event = MatchEvent::Failed {reason };
+            let json = serde_json::to_string(&event).expect("failed to serialize match event");
+            let _: Result<(), redis::RedisError> = redis_conn
+                .publish(format!("matchStream_{}", match_uuid.to_string()), json)
+                .await;
             return;
         }
     };
@@ -649,8 +677,20 @@ async fn play_match(
             Ok(uci_move) => match uci_move.to_move(&pos) {
                 Ok(m) => {
                     let san = San::from_move(&pos, m).to_string();
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+
                     pos.play_unchecked(m);
-                    moves.push(san);
+                    moves.push(san.clone());
+                    let event = MatchEvent::Move {
+                        san: san,
+                        fen: Fen::from_position(&pos, EnPassantMode::Legal).to_string(),
+                        move_number: moves.len() as u32,
+                    };
+                    let json =
+                        serde_json::to_string(&event).expect("failed to serialize match event");
+                    let _: Result<(), redis::RedisError> = redis_conn
+                        .publish(format!("matchStream_{}", match_uuid.to_string()), json)
+                        .await;
                 }
                 Err(_) => {
                     println!("invalid move from worker: {uci}");
@@ -805,6 +845,7 @@ async fn validate_bot(
     };
 
     let mut valid = true;
+    let mut invalid_reason = String::new();
     let mut timed_out = false;
 
     // Play out a match of up to 20 moves, verifying the worker's
@@ -820,6 +861,7 @@ async fn validate_bot(
             || prepared.stdin.write_all(b"\n").await.is_err()
         {
             valid = false;
+            invalid_reason = "failed to write data for next move".to_string();
             break;
         }
         let _ = prepared.stdin.flush().await;
@@ -829,6 +871,7 @@ async fn validate_bot(
             Err(s) => {
                 // TODO return the right error
                 valid = false;
+                invalid_reason = s;
                 break;
             }
         };
@@ -842,10 +885,12 @@ async fn validate_bot(
                 Err(_) => {
                     println!("invalid move from worker: {uci}");
                     valid = false;
+                    invalid_reason = format!("invalid move from bot: {uci}");
                 }
             },
             Err(_) => {
                 println!("unparseable move from worker: {uci}");
+                invalid_reason = format!("unparseable move from bot: {uci}");
                 valid = false;
             }
         }
@@ -936,13 +981,13 @@ async fn validate_bot(
                 }
             }
 
-            Err(_) => {
+            Err(e) => {
                 println!("failed");
                 publish_validation_status(
                     &mut redis_conn,
                     &job_id,
                     ValidationStatus::Failed {
-                        reason: "Something fail :( (good enough for now)".to_string(),
+                        reason: e.to_string(),
                     },
                 )
                 .await;
@@ -953,7 +998,7 @@ async fn validate_bot(
             &mut redis_conn,
             &job_id,
             ValidationStatus::Failed {
-                reason: "Something fail :( (good enough for now)".to_string(),
+                reason: invalid_reason,
             },
         )
         .await;

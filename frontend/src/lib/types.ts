@@ -41,6 +41,11 @@ export type MatchStatus =
 	| { status: "Finished"; winner: string }
 	| { status: "Failed"; reason: string };
 
+export type MatchEvent =
+	| { type: "Move"; san: string; fen: string; move_number: number }
+	| { type: "Finished"; winner: string; reason: string }
+	| { type: "Failed"; reason: string };
+
 export interface MatchRequest {
 	player_bot_id: string;
 	opponent_bot_id: string;

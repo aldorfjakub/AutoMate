@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{convert::Infallible, sync::Arc, time::Duration};
 
 use axum::{
     Json, Router,
@@ -10,6 +10,10 @@ use redis::AsyncCommands;
 use reqwest::StatusCode;
 use serde_json::json;
 use uuid::Uuid;
+
+use axum::response::sse::{Event, KeepAlive, Sse};
+use tokio::sync::mpsc;
+use tokio_stream::{Stream, StreamExt, wrappers::ReceiverStream};
 
 use crate::models::{
     dto::{BotInfo, BotSummary, NewBotRequest},
@@ -345,6 +349,41 @@ async fn play_bot(
         .into_response())
 }
 
+async fn watch_match(
+    State(state): State<Arc<AppState>>,
+    Path(match_id): Path<Uuid>,
+    session: SessionUser,
+) -> AppResult<impl IntoResponse> {
+    let (tx, rx) = mpsc::channel::<Result<Event, Infallible>>(32);
+
+    let mut pubsub = state
+        .redis_client
+        .get_async_pubsub()
+        .await
+        .map_err(|_| AppError::Internal("redis pubsub failed"))?;
+    pubsub
+        .subscribe(format!("matchStream_{match_id}"))
+        .await
+        .map_err(|_| AppError::Internal("subscribe failed"))?;
+
+    tokio::spawn(async move {
+        let mut stream = pubsub.on_message();
+        while let Some(msg) = stream.next().await {
+            // Receive MatchEvent json
+            if tx
+                .send(Ok(Event::default().event("match").data(msg.get_payload().unwrap_or("".to_string()))))
+                .await
+                .is_err()
+            {
+                break;
+            }
+        }
+    });
+
+    Ok(Sse::new(ReceiverStream::new(rx))
+        .keep_alive(KeepAlive::default().interval(Duration::from_secs(15))))
+}
+
 pub fn bots_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/", get(get_user_bots).post(register_bot))
@@ -358,6 +397,8 @@ pub fn bots_routes() -> Router<Arc<AppState>> {
         .route("/play", post(play_bot))
         .route("/match/{match_id}/status", get(get_match_status))
         .route("/match/{match_id}", get(get_match_result))
+        .route("/match/{match_id}/watch", get(watch_match))
+
 }
 
 // New routes for new feature
