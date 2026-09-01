@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use axum::response::sse::{Event, KeepAlive, Sse};
 use tokio::sync::mpsc;
-use tokio_stream::{Stream, StreamExt, wrappers::ReceiverStream};
+use tokio_stream::{StreamExt, wrappers::ReceiverStream};
 
 use crate::models::{
     dto::{BotInfo, BotSummary, NewBotRequest},
@@ -105,7 +105,7 @@ async fn get_user_bots(
 ) -> AppResult<Json<Vec<BotSummary>>> {
     let bots = sqlx::query_as!(
         BotSummary,
-        r#"SELECT id as "id: uuid::Uuid", name, description, is_active, is_public, is_valid FROM bots WHERE user_id = ?"#,
+        r#"SELECT id as "id: uuid::Uuid", user_id as "owner_id: uuid::Uuid", name, description, is_active, is_public, is_valid FROM bots WHERE user_id = ?"#,
         &session.user_id
     )
     .fetch_all(&state.sqlite_pool)
@@ -150,7 +150,7 @@ async fn register_bot(
     State(state): State<Arc<AppState>>,
     session: SessionUser,
     Json(payload): Json<NewBotRequest>,
-) -> AppResult<()> {
+) -> AppResult<impl IntoResponse> {
     validate_payload(&payload)?;
 
     let bot_id = Uuid::now_v7();
@@ -165,7 +165,7 @@ async fn register_bot(
     )
     .execute(&state.sqlite_pool)
     .await?;
-    Ok(())
+    Ok((StatusCode::CREATED, bot_id.to_string()))
 }
 
 async fn validate_bot(
@@ -175,7 +175,7 @@ async fn validate_bot(
 ) -> AppResult<Response> {
     let bot = sqlx::query_as!(BotInfo,r#"SELECT id as "id: uuid::Uuid", name, description, is_active, is_public, source_code, is_valid FROM bots WHERE id = ? AND user_id = ?"#, &bot_id, &session.user_id).fetch_optional(&state.sqlite_pool).await?.ok_or(AppError::NotFound)?;
     if bot.is_valid {
-        return Err(AppError::BadRequest("Bot is already validated."));
+        return Err(AppError::Conflict("Bot is already validated."));
     }
 
     let job_id = format!("job_{}", Uuid::now_v7().to_string());
@@ -207,182 +207,39 @@ async fn validate_bot(
     Ok((StatusCode::ACCEPTED, Json(json!({"job_id": job_id}))).into_response())
 }
 
-async fn get_job_status(
-    State(state): State<Arc<AppState>>,
-    Path(job_id): Path<String>,
-    session: SessionUser,
-) -> AppResult<Json<ValidationStatus>> {
-    let mut redis_conn: redis::aio::MultiplexedConnection = state.redis_con.clone();
 
-    let res: String = redis_conn
-        .get(job_id)
-        .await
-        .map_err(|_| AppError::NotFound)?;
-    let status: ValidationStatus = serde_json::from_str(&res)
-        .map_err(|_| AppError::Internal("Failed to parse validation status"))?;
 
-    Ok(Json(status))
-}
-
-// TEMPORARY
+// LEGACY, delete later
 // TODO replace both get_math_status and get_job_status with single function or think of better solution
-async fn get_match_status(
-    State(state): State<Arc<AppState>>,
-    Path(match_id): Path<String>,
-    session: SessionUser,
-) -> AppResult<Json<MatchStatus>> {
-    let redis_key = format!("match_{}", match_id);
-    let mut redis_conn: redis::aio::MultiplexedConnection = state.redis_con.clone();
+// async fn get_match_status(
+//     State(state): State<Arc<AppState>>,
+//     Path(match_id): Path<String>,
+//     session: SessionUser,
+// ) -> AppResult<Json<MatchStatus>> {
+//     let redis_key = format!("match_{}", match_id);
+//     let mut redis_conn: redis::aio::MultiplexedConnection = state.redis_con.clone();
 
-    let res: String = redis_conn
-        .get(redis_key)
-        .await
-        .map_err(|_| AppError::NotFound)?;
-    let status: MatchStatus = serde_json::from_str(&res)
-        .map_err(|_| AppError::Internal("Failed to parse match status"))?;
+//     let res: String = redis_conn
+//         .get(redis_key)
+//         .await
+//         .map_err(|_| AppError::NotFound)?;
+//     let status: MatchStatus = serde_json::from_str(&res)
+//         .map_err(|_| AppError::Internal("Failed to parse match status"))?;
 
-    Ok(Json(status))
-}
+//     Ok(Json(status))
+// }
 
-async fn get_match_result(
-    State(state): State<Arc<AppState>>,
-    Path(match_id): Path<Uuid>,
-    session: SessionUser,
-) -> AppResult<Json<Match>> {
-    let m = sqlx::query_as!(
-        Match,
-        r#"
-        SELECT id as "id: uuid::Uuid",
-            white_bot_id as "white_bot_id: Uuid",
-            black_bot_id as "black_bot_id: Uuid",
-               match_status, is_ranked, winner_color, win_reason, pgn,
-               white_elo_change, black_elo_change, error_message,
-               created_at, completed_at
-        FROM matches
-        WHERE id = ?
-    "#,
-        &match_id
-    )
-    .fetch_optional(&state.sqlite_pool)
-    .await?
-    .ok_or(AppError::NotFound)?;
-
-    Ok(Json(m))
-}
 
 // For now this allows only playing against system bots
 async fn get_system_bots(
     State(state): State<Arc<AppState>>,
     session: SessionUser,
 ) -> AppResult<Json<Vec<BotSummary>>> {
-    let system_bots: Vec<BotSummary> = sqlx::query_as!(BotSummary,r#"SELECT id as "id: uuid::Uuid", name, description, is_active, is_public, is_valid FROM bots WHERE user_id is NULL"#).fetch_all(&state.sqlite_pool).await?;
+    let system_bots: Vec<BotSummary> = sqlx::query_as!(BotSummary,r#"SELECT id as "id: uuid::Uuid", user_id as "owner_id: uuid::Uuid", name, description, is_active, is_public, is_valid FROM bots WHERE user_id is NULL"#).fetch_all(&state.sqlite_pool).await?;
     Ok(Json(system_bots))
 }
 
-async fn play_bot(
-    State(state): State<Arc<AppState>>,
-    session: SessionUser,
-    Json(json): Json<MatchRequest>,
-) -> AppResult<Response> {
-    let user_bot = sqlx::query_as!(BotSummary, r#"SELECT id as "id: uuid::Uuid", name, description, is_active, is_public, is_valid FROM bots WHERE id = ? AND user_id = ?"#, &json.player_bot_id, &session.user_id).fetch_one(&state.sqlite_pool).await?;
-    println!("User bot found");
-    if !user_bot.is_valid {
-        return Err(AppError::NotFound);
-    }
 
-    let system_bot = sqlx::query_as!(BotSummary, r#"SELECT id as "id: uuid::Uuid", name, description, is_active, is_public, is_valid FROM bots WHERE id = ? AND user_id is NULL"#, &json.opponent_bot_id).fetch_one(&state.sqlite_pool).await?;
-    println!("System bot found");
-
-    let match_uuid = Uuid::new_v4();
-    let match_redis_id = format!("match_{}", match_uuid);
-    // match_status will be pending, is_ranked will be false
-    let white = if rand::random_bool(0.5) {
-        json.player_bot_id
-    } else {
-        json.opponent_bot_id
-    };
-    let black = if white == json.player_bot_id {
-        json.opponent_bot_id
-    } else {
-        json.player_bot_id
-    };
-
-    let _ = sqlx::query!(
-        "INSERT INTO matches (id, white_bot_id, black_bot_id) VALUES (?, ?, ?)",
-        match_uuid,
-        &white,
-        &black
-    )
-    .execute(&state.sqlite_pool)
-    .await?;
-    let job: Job = Job::Match {
-        match_id: match_uuid.to_string(),
-        white_bot_id: white.to_string(),
-        black_bot_id: black.to_string(),
-    };
-
-    let status = MatchStatus::Pending;
-
-    let mut redis_conn: redis::aio::MultiplexedConnection = state.redis_con.clone();
-    let _: () = redis_conn
-        .set_ex(
-            &match_redis_id,
-            serde_json::to_string(&status)
-                .map_err(|_| AppError::Internal("Failed to serialize job_status to json"))?,
-            600,
-        )
-        .await
-        .map_err(|_| AppError::Internal("Redis failed"))?;
-    let _: () = redis_conn
-        .lpush(
-            "job_queue",
-            serde_json::to_string(&job)
-                .map_err(|_| AppError::Internal("Failed to serialize job to json"))?,
-        )
-        .await
-        .map_err(|_| AppError::Internal("Redis failed"))?;
-
-    Ok((
-        StatusCode::ACCEPTED,
-        Json(json!({"match_id": &match_uuid.to_string()})),
-    )
-        .into_response())
-}
-
-async fn watch_match(
-    State(state): State<Arc<AppState>>,
-    Path(match_id): Path<Uuid>,
-    session: SessionUser,
-) -> AppResult<impl IntoResponse> {
-    let (tx, rx) = mpsc::channel::<Result<Event, Infallible>>(32);
-
-    let mut pubsub = state
-        .redis_client
-        .get_async_pubsub()
-        .await
-        .map_err(|_| AppError::Internal("redis pubsub failed"))?;
-    pubsub
-        .subscribe(format!("matchStream_{match_id}"))
-        .await
-        .map_err(|_| AppError::Internal("subscribe failed"))?;
-
-    tokio::spawn(async move {
-        let mut stream = pubsub.on_message();
-        while let Some(msg) = stream.next().await {
-            // Receive MatchEvent json
-            if tx
-                .send(Ok(Event::default().event("match").data(msg.get_payload().unwrap_or("".to_string()))))
-                .await
-                .is_err()
-            {
-                break;
-            }
-        }
-    });
-
-    Ok(Sse::new(ReceiverStream::new(rx))
-        .keep_alive(KeepAlive::default().interval(Duration::from_secs(15))))
-}
 
 pub fn bots_routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -392,12 +249,8 @@ pub fn bots_routes() -> Router<Arc<AppState>> {
             get(get_bot_details).put(update_bot).delete(delete_bot),
         )
         .route("/{id}/validate", post(validate_bot))
-        .route("/{id}/status", get(get_job_status))
         .route("/system-bots", get(get_system_bots))
-        .route("/play", post(play_bot))
-        .route("/match/{match_id}/status", get(get_match_status))
-        .route("/match/{match_id}", get(get_match_result))
-        .route("/match/{match_id}/watch", get(watch_match))
+        //.route("/match/{match_id}/status", get(get_match_status))
 
 }
 

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use axum::Router;
 
-use crate::{handlers::{auth_routes, bots_routes, user_routes}, state::AppState};
+use crate::{handlers::{auth_routes, bots_routes, job_routes, matches_routes, play_routes, user_routes}, state::AppState};
 
 
 fn api_routes() -> Router<Arc<AppState>>{
@@ -9,6 +9,9 @@ fn api_routes() -> Router<Arc<AppState>>{
         .nest("/auth", auth_routes())
         .nest("/user", user_routes())
         .nest("/bots", bots_routes())
+        .nest("/jobs", job_routes())
+        .nest("/play", play_routes())
+        .nest("/matches", matches_routes())
 }
 
 pub fn app_routes(state: AppState) -> Router<()> {

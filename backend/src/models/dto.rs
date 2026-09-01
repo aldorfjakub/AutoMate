@@ -45,6 +45,7 @@ pub struct BotInfo {
 #[derive(Serialize, Deserialize)]
 pub struct BotSummary {
     pub id: Option<Uuid>,
+    pub owner_id: Option<Uuid>,
     pub name: String,
     pub description: Option<String>,
     pub is_active: bool,
