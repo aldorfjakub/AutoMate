@@ -5,7 +5,6 @@ import type {
 	Match,
 	MatchEvent,
 	MatchRequest,
-	MatchStatus,
 	NewBotRequest,
 	PlayMatchResponse,
 	ValidateBotResponse,
@@ -39,6 +38,23 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 	return JSON.parse(text) as T;
 }
 
+async function requestText(path: string, init?: RequestInit): Promise<string> {
+	const res = await fetch(`${API_BASE}${path}`, {
+		...init,
+		credentials: "include",
+		headers:
+			init?.body && typeof init.body === "string"
+				? { "Content-Type": "application/json", ...init.headers }
+				: init?.headers
+	});
+
+	if (!res.ok) {
+		throw new ApiError(res.status, await parseApiError(res));
+	}
+
+	return res.text();
+}
+
 function json(method: string, body: unknown): RequestInit {
 	return { method, body: JSON.stringify(body) };
 }
@@ -47,8 +63,9 @@ export function listBots(): Promise<BotSummary[]> {
 	return request<BotSummary[]>("/api/bots");
 }
 
-export function createBot(req: NewBotRequest): Promise<void> {
-	return request<void>("/api/bots", json("POST", req));
+// POST /api/bots returns 201 with the new bot's id as a plain-text body.
+export function createBot(req: NewBotRequest): Promise<string> {
+	return requestText("/api/bots", json("POST", req));
 }
 
 export function getBot(id: string): Promise<BotInfo> {
@@ -67,9 +84,8 @@ export function validateBot(id: string): Promise<ValidateBotResponse> {
 	return request<ValidateBotResponse>(`/api/bots/${id}/validate`, { method: "POST" });
 }
 
-// The status endpoint is keyed by the job_id returned from validateBot, not the bot id.
 export function getValidationStatus(jobId: string): Promise<ValidationStatus> {
-	return request<ValidationStatus>(`/api/bots/${jobId}/status`);
+	return request<ValidationStatus>(`/api/jobs/${jobId}/status`);
 }
 
 export function listSystemBots(): Promise<BotSummary[]> {
@@ -77,26 +93,26 @@ export function listSystemBots(): Promise<BotSummary[]> {
 }
 
 export function playMatch(req: MatchRequest): Promise<PlayMatchResponse> {
-	return request<PlayMatchResponse>("/api/bots/play", json("POST", req));
-}
-
-export function getMatchStatus(matchId: string): Promise<MatchStatus> {
-	return request<MatchStatus>(`/api/bots/match/${matchId}/status`);
+	return request<PlayMatchResponse>("/api/play", json("POST", req));
 }
 
 export function getMatch(matchId: string): Promise<Match> {
-	return request<Match>(`/api/bots/match/${matchId}`);
+	return request<Match>(`/api/matches/${matchId}`);
+}
+
+export function listMatches(): Promise<Match[]> {
+	return request<Match[]>("/api/matches");
 }
 
 // Realtime match stream. The SSE endpoint sends `event: match` lines whose data
-// is a MatchEvent JSON payload. Returns a close() function; onError is called
-// for non-close transport errors (no events for a while, network drop).
+// is a MatchEvent JSON payload (board/finished/failed). Returns a close()
+// function; onStatus reports transport-level connect/reconnect.
 export function watchMatchSse(
 	matchId: string,
 	onEvent: (event: MatchEvent) => void,
-	onError: () => void
+	onStatus?: (status: "connected" | "reconnecting") => void
 ): () => void {
-	const source = new EventSource(`${API_BASE}/api/bots/match/${matchId}/watch`, {
+	const source = new EventSource(`${API_BASE}/api/matches/${matchId}/watch`, {
 		withCredentials: true
 	});
 	source.addEventListener("match", (e) => {
@@ -109,10 +125,9 @@ export function watchMatchSse(
 			// ignore malformed frames
 		}
 	});
+	source.onopen = () => onStatus?.("connected");
 	source.onerror = () => {
-		if (source.readyState === EventSource.CLOSED) return;
-		onError();
-		source.close();
+		if (source.readyState !== EventSource.CLOSED) onStatus?.("reconnecting");
 	};
 	return () => source.close();
 }

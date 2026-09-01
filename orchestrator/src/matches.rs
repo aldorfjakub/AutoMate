@@ -1,9 +1,7 @@
 use std::{str::FromStr, time::Duration};
 
 use redis::{AsyncCommands, aio::MultiplexedConnection};
-use shakmaty::{
-    Chess, EnPassantMode, KnownOutcome, Outcome, Position, fen::Fen, san::San, uci::UciMove,
-};
+use shakmaty::{Chess, EnPassantMode, KnownOutcome, Position, fen::Fen, san::San, uci::UciMove};
 use sqlx::sqlite::SqlitePool;
 use tokio::io::AsyncWriteExt;
 use uuid::Uuid;
@@ -32,16 +30,24 @@ async fn fetch_bot_or_fail(
     match get_bot(db_pool, bot_id).await {
         Ok(Some(bot)) => Ok(bot),
         Ok(_) => {
-            publish_match_status(redis_conn, match_id, MatchStatus::Failed {
-                reason: "No such bot".to_string(),
-            })
+            publish_match_status(
+                redis_conn,
+                match_id,
+                MatchStatus::Failed {
+                    reason: "No such bot".to_string(),
+                },
+            )
             .await;
             Err(())
         }
         _ => {
-            publish_match_status(redis_conn, match_id, MatchStatus::Failed {
-                reason: "Internal error".to_string(),
-            })
+            publish_match_status(
+                redis_conn,
+                match_id,
+                MatchStatus::Failed {
+                    reason: "Internal error".to_string(),
+                },
+            )
             .await;
             Err(())
         }
@@ -83,7 +89,7 @@ impl MatchEndReason {
 }
 
 struct MatchConclusion {
-    winner_color: Option<&'static str>,
+    winner_color: Outcome,
     win_reason: &'static str,
     pgn: String,
     error_message: Option<String>,
@@ -99,7 +105,7 @@ async fn conclude_match(db_pool: &SqlitePool, match_uuid: Uuid, conclusion: &Mat
              error_message = ?,
              completed_at = CURRENT_TIMESTAMP
            WHERE id = ?"#,
-        conclusion.winner_color,
+        conclusion.winner_color.as_str(),
         conclusion.win_reason,
         conclusion.pgn,
         conclusion.error_message,
@@ -122,10 +128,10 @@ fn build_pgn(white_name: &str, black_name: &str, result: &str, moves: &[String])
     pgn
 }
 
-fn result_for_color(winner_color: Option<&str>) -> &'static str {
+fn result_for_color(winner_color: Outcome) -> &'static str {
     match winner_color {
-        Some("white") => "1-0",
-        Some("black") => "0-1",
+        Outcome::White => "1-0",
+        Outcome::Black => "0-1",
         _ => "1/2-1/2",
     }
 }
@@ -134,12 +140,20 @@ fn bot_failure_winner(
     current_bot_id: Option<Uuid>,
     white_bot_id: Uuid,
     black_bot_id: Uuid,
-) -> (&'static str, Uuid) {
+) -> (Outcome, Uuid) {
     if current_bot_id == Some(white_bot_id) {
-        ("black", black_bot_id)
+        (Outcome::Black, black_bot_id)
     } else {
-        ("white", white_bot_id)
+        (Outcome::White, white_bot_id)
     }
+}
+
+async fn send_event(event: MatchEvent, ctx: &mut MatchCtx) {
+    let json = serde_json::to_string(&event).expect("failed to serialize match event");
+    let _: Result<(), redis::RedisError> = ctx
+        .redis_conn
+        .publish(format!("matchStream_{}", ctx.match_uuid.to_string()), json)
+        .await;
 }
 
 async fn fail_match(
@@ -173,6 +187,13 @@ async fn fail_match(
         },
     )
     .await;
+
+    let event: MatchEvent = MatchEvent::Failed { reason: reason.as_str().to_string() };
+    let json = serde_json::to_string(&event).expect("failed to serialize match event");
+    let _: Result<(), redis::RedisError> = ctx
+        .redis_conn
+        .publish(format!("matchStream_{}", ctx.match_uuid.to_string()), json)
+        .await;
 }
 
 async fn finish_match(ctx: &mut MatchCtx, redis_winner: String, conclusion: MatchConclusion) {
@@ -180,14 +201,16 @@ async fn finish_match(ctx: &mut MatchCtx, redis_winner: String, conclusion: Matc
         &mut ctx.redis_conn,
         &ctx.match_id,
         MatchStatus::Finished {
-            winner: redis_winner,
+            winner: redis_winner.clone(),
         },
     )
     .await;
 
     let event = MatchEvent::Finished {
-        winner: conclusion.winner_color.unwrap_or("").to_string(),
+        outcome: conclusion.winner_color.clone(),
+        winner_name: redis_winner,
         reason: conclusion.win_reason.to_string(),
+        pgn: conclusion.pgn.clone(),
     };
     let json = serde_json::to_string(&event).expect("failed to serialize match event");
     let _: Result<(), redis::RedisError> = ctx
@@ -209,14 +232,14 @@ async fn finish_match_failure(
     let pgn = build_pgn(
         &ctx.white_bot_name,
         &ctx.black_bot_name,
-        result_for_color(Some(winner_color)),
+        result_for_color(winner_color.clone()),
         moves,
     );
     finish_match(
         ctx,
         redis_winner.to_string(),
         MatchConclusion {
-            winner_color: Some(winner_color),
+            winner_color: winner_color,
             win_reason: reason.as_str(),
             pgn,
             error_message: Some(error_message),
@@ -235,10 +258,11 @@ pub async fn play_match(
     let match_uuid = Uuid::from_str(&match_id).expect("Failed to make uuid out of match_id");
     let match_id = format!("match_{}", match_id);
 
-let white_bot_info = match fetch_bot_or_fail(&mut redis_conn, &match_id, &db_pool, white_bot_id).await {
-        Ok(bot) => bot,
-        Err(_) => return,
-    };
+    let white_bot_info =
+        match fetch_bot_or_fail(&mut redis_conn, &match_id, &db_pool, white_bot_id).await {
+            Ok(bot) => bot,
+            Err(_) => return,
+        };
     let white_bot_source_code = match white_bot_info.source_code {
         Some(code) => code,
         None => {
@@ -254,10 +278,11 @@ let white_bot_info = match fetch_bot_or_fail(&mut redis_conn, &match_id, &db_poo
         }
     };
 
-let black_bot_info = match fetch_bot_or_fail(&mut redis_conn, &match_id, &db_pool, black_bot_id).await {
-        Ok(bot) => bot,
-        Err(_) => return,
-    };
+    let black_bot_info =
+        match fetch_bot_or_fail(&mut redis_conn, &match_id, &db_pool, black_bot_id).await {
+            Ok(bot) => bot,
+            Err(_) => return,
+        };
     let black_bot_source_code = match black_bot_info.source_code {
         Some(code) => code,
         None => {
@@ -314,12 +339,6 @@ let black_bot_info = match fetch_bot_or_fail(&mut redis_conn, &match_id, &db_poo
                 reason.clone(),
             )
             .await;
-            let event: MatchEvent = MatchEvent::Failed { reason };
-            let json = serde_json::to_string(&event).expect("failed to serialize match event");
-            let _: Result<(), redis::RedisError> = ctx
-                .redis_conn
-                .publish(format!("matchStream_{}", ctx.match_uuid.to_string()), json)
-                .await;
             return;
         }
     };
@@ -337,14 +356,14 @@ let black_bot_info = match fetch_bot_or_fail(&mut redis_conn, &match_id, &db_poo
     let mut current_bot = &mut white_bot;
     loop {
         match pos.outcome() {
-            Outcome::Known(KnownOutcome::Decisive { winner }) => {
+            shakmaty::Outcome::Known(KnownOutcome::Decisive { winner }) => {
                 if winner.is_white() {
                     let pgn = build_pgn(&ctx.white_bot_name, &ctx.black_bot_name, "1-0", &moves);
                     finish_match(
                         &mut ctx,
                         white_bot_id.to_string(),
                         MatchConclusion {
-                            winner_color: Some("white"),
+                            winner_color: Outcome::White,
                             win_reason: MatchEndReason::Checkmate.as_str(),
                             pgn,
                             error_message: None,
@@ -357,7 +376,7 @@ let black_bot_info = match fetch_bot_or_fail(&mut redis_conn, &match_id, &db_poo
                         &mut ctx,
                         black_bot_id.to_string(),
                         MatchConclusion {
-                            winner_color: Some("black"),
+                            winner_color: Outcome::Black,
                             win_reason: MatchEndReason::Checkmate.as_str(),
                             pgn,
                             error_message: None,
@@ -367,13 +386,13 @@ let black_bot_info = match fetch_bot_or_fail(&mut redis_conn, &match_id, &db_poo
                 }
                 break;
             }
-            Outcome::Known(KnownOutcome::Draw) => {
+            shakmaty::Outcome::Known(KnownOutcome::Draw) => {
                 let pgn = build_pgn(&ctx.white_bot_name, &ctx.black_bot_name, "1/2-1/2", &moves);
                 finish_match(
                     &mut ctx,
                     String::new(),
                     MatchConclusion {
-                        winner_color: None,
+                        winner_color: Outcome::Draw,
                         win_reason: MatchEndReason::Draw.as_str(),
                         pgn,
                         error_message: None,
@@ -382,7 +401,7 @@ let black_bot_info = match fetch_bot_or_fail(&mut redis_conn, &match_id, &db_poo
                 .await;
                 break;
             }
-            Outcome::Unknown => (),
+            shakmaty::Outcome::Unknown => (),
         }
         let fen = Fen::from_position(&pos, EnPassantMode::Legal).to_string();
         if current_bot.stdin.write_all(fen.as_bytes()).await.is_err()
@@ -420,21 +439,16 @@ let black_bot_info = match fetch_bot_or_fail(&mut redis_conn, &match_id, &db_poo
             Ok(uci_move) => match uci_move.to_move(&pos) {
                 Ok(m) => {
                     let san = San::from_move(&pos, m).to_string();
-                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    //tokio::time::sleep(Duration::from_secs(1)).await;
 
                     pos.play_unchecked(m);
                     moves.push(san.clone());
-                    let event = MatchEvent::Move {
-                        san: san,
+                    let event = MatchEvent::Board {
+                        san: Some(san),
                         fen: Fen::from_position(&pos, EnPassantMode::Legal).to_string(),
                         move_number: moves.len() as u32,
                     };
-                    let json =
-                        serde_json::to_string(&event).expect("failed to serialize match event");
-                    let _: Result<(), redis::RedisError> = ctx
-                        .redis_conn
-                        .publish(format!("matchStream_{}", ctx.match_uuid.to_string()), json)
-                        .await;
+                    send_event(event, &mut ctx).await;
                 }
                 Err(_) => {
                     println!("invalid move from worker: {uci}");

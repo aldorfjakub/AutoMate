@@ -6,6 +6,7 @@ export interface User {
 
 export interface BotSummary {
 	id: string;
+	owner_id?: string | null;
 	name: string;
 	description?: string | null;
 	is_active: boolean;
@@ -35,16 +36,16 @@ export type ValidationStatus =
 	| { status: "Validated" }
 	| { status: "Failed"; reason: string };
 
-export type MatchStatus =
-	| { status: "Pending" }
-	| { status: "Running" }
-	| { status: "Finished"; winner: string }
-	| { status: "Failed"; reason: string };
-
 export type MatchEvent =
-	| { type: "Move"; san: string; fen: string; move_number: number }
-	| { type: "Finished"; winner: string; reason: string }
-	| { type: "Failed"; reason: string };
+	| { type: "board"; fen: string; move_number: number; san: string | null }
+	| {
+			type: "finished";
+			outcome: "white" | "black" | "draw";
+			winner_name: string;
+			reason: string;
+			pgn: string;
+	  }
+	| { type: "failed"; reason: string };
 
 export interface MatchRequest {
 	player_bot_id: string;

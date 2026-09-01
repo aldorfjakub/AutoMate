@@ -9,18 +9,21 @@
 		listBots,
 		listSystemBots,
 		playMatch,
-		getMatchStatus,
 		getMatch,
 		watchMatchSse,
 		ApiError
 	} from "$lib/api/bots";
-	import type { BotSummary, Match, MatchEvent, MatchStatus } from "$lib/types";
+	import type { BotSummary, Match, MatchEvent } from "$lib/types";
 	import MatchReplay from "$lib/components/match-replay.svelte";
 	import MatchLive from "$lib/components/match-live.svelte";
 	import { Swords, LoaderCircle, RotateCcw, Radio } from "lucide-svelte";
 
-	const POLL_INTERVAL_MS = 2000;
-	const MAX_ATTEMPTS = 60;
+	type ResultInfo = {
+		outcome: "white" | "black" | "draw";
+		winner_name: string;
+		reason: string;
+		pgn: string;
+	};
 
 	let userBots = $state<BotSummary[]>([]);
 	let systemBots = $state<BotSummary[]>([]);
@@ -32,22 +35,21 @@
 	let starting = $state(false);
 
 	let matchId = $state("");
-	let polling = $state(false);
-	let matchStatus = $state<MatchStatus | null>(null);
-	let matchError = $state<string | null>(null);
 	let matchLabel = $state("");
+	let phase = $state<"idle" | "live" | "finished" | "failed">("idle");
+	let matchError = $state<string | null>(null);
+
+	let liveMoves = $state<{ san: string; move_number: number }[]>([]);
+	let liveFen = $state<string | null>(null);
+
+	let result = $state<ResultInfo | null>(null);
+	let failedReason = $state<string | null>(null);
+
 	let matchDetail = $state<Match | null>(null);
 	let detailError = $state<string | null>(null);
 	let loadingDetail = $state(false);
 
-	// Live board built from MatchEvent::Move frames while watching.
-	let liveSan = $state<{ san: string; fen: string; move_number: number }[]>([]);
-	let liveFen = $state<string | null>(null);
-	let liveStatus = $state<"live" | "settled" | "idle">("idle");
-	let attempts = 0;
-	let timer: ReturnType<typeof setInterval> | undefined;
 	let closeWatch: (() => void) | undefined;
-	let liveWatchdog: ReturnType<typeof setTimeout> | undefined;
 
 	const playable = $derived(userBots.filter((b) => b.is_valid));
 
@@ -56,11 +58,7 @@
 	const botNames = $derived(
 		Object.fromEntries([...userBots, ...systemBots].map((b) => [b.id, b.name]))
 	);
-	const winnerName = $derived.by(() => {
-		const status = matchStatus;
-		if (status?.status !== "Finished" || !status.winner) return "";
-		return [...userBots, ...systemBots].find((b) => b.id === status.winner)?.name ?? "Unknown";
-	});
+	const winnerName = $derived(result?.winner_name ?? "");
 
 	async function load() {
 		loading = true;
@@ -78,93 +76,91 @@
 		}
 	}
 
-	function stopPolling() {
-		if (timer) clearInterval(timer);
-		timer = undefined;
-		polling = false;
-	}
-
-	function clearWatchdog() {
-		if (liveWatchdog) clearTimeout(liveWatchdog);
-		liveWatchdog = undefined;
-	}
-
 	function cleanupWatch() {
 		closeWatch?.();
 		closeWatch = undefined;
-		clearWatchdog();
 	}
 
-	async function pollMatch() {
-		if (!matchId) return;
-		attempts += 1;
-		if (attempts > MAX_ATTEMPTS) {
-			stopPolling();
-			matchError = "Match timed out; try again.";
-			return;
+	function applyBoard(evt: Extract<MatchEvent, { type: "board" }>) {
+		phase = "live";
+		liveFen = evt.fen;
+		const existing = liveMoves.find((m) => m.move_number === evt.move_number);
+		if (existing) {
+			liveMoves = liveMoves.map((m) => (m.move_number === evt.move_number ? { san: evt.san ?? "", move_number: evt.move_number } : m));
+		} else {
+			liveMoves = [...liveMoves, { san: evt.san ?? "", move_number: evt.move_number }];
 		}
-		try {
-			const status = await getMatchStatus(matchId);
-			matchStatus = status;
-			if (status.status === "Finished" || status.status === "Failed") stopPolling();
-		} catch (e) {
-			stopPolling();
-			matchError =
-				e instanceof ApiError && e.status === 404
-					? "Match expired or unavailable; try again."
-					: e instanceof ApiError
-						? e.message
-						: "Could not check match status.";
-		}
+	}
+
+	function settleFinished(evt: Extract<MatchEvent, { type: "finished" }>) {
+		phase = "finished";
+		result = {
+			outcome: evt.outcome,
+			winner_name: evt.winner_name,
+			reason: evt.reason,
+			pgn: evt.pgn,
+		};
+		cleanupWatch();
 	}
 
 	function handleMatchEvent(evt: MatchEvent) {
-		clearWatchdog();
-		if (evt.type === "Move") {
-			liveSan = [...liveSan, { san: evt.san, fen: evt.fen, move_number: evt.move_number }].slice(-300);
-			liveFen = evt.fen;
-		} else if (evt.type === "Finished") {
-			liveStatus = "settled";
-			matchStatus = { status: "Finished", winner: evt.winner };
-			stopPolling();
-		} else if (evt.type === "Failed") {
-			liveStatus = "settled";
-			matchStatus = { status: "Failed", reason: evt.reason };
-			stopPolling();
+		if (evt.type === "board") {
+			applyBoard(evt);
+		} else if (evt.type === "finished") {
+			settleFinished(evt);
+		} else if (evt.type === "failed") {
+			phase = "failed";
+			failedReason = evt.reason;
+			cleanupWatch();
+		}
+	}
+
+	// One-shot reconcile when the stream breaks: the match status poll endpoint is
+	// gone, so fall back to the full match record to see if it already ended.
+
+	async function reconcileFromDb() {
+		if (!matchId || phase === "finished" || phase === "failed") return;
+		try {
+			const m = await getMatch(matchId);
+			if (m.match_status === "finished") {
+				const winner_id = m.winner_color === "black" ? m.black_bot_id : m.white_bot_id;
+				phase = "finished";
+				result = {
+					outcome: (m.winner_color as "white" | "black" | "draw") ?? "draw",
+					winner_name: m.winner_color === "draw" || !m.winner_color ? "" : (botNames[winner_id] ?? "Unknown"),
+					reason: m.win_reason ?? "",
+					pgn: m.pgn ?? "",
+				};
+				cleanupWatch();
+			} else if (m.match_status === "failed") {
+				phase = "failed";
+				failedReason = m.error_message ?? "Match failed";
+				cleanupWatch();
+			}
+		} catch {
+			// EventSource keeps reconnecting; stay in live phase
 		}
 	}
 
 	function startWatch() {
 		cleanupWatch();
 		if (!matchId) return;
-		liveSan = [];
+		phase = "live";
 		liveFen = null;
-		liveStatus = "live";
+		liveMoves = [];
 		closeWatch = watchMatchSse(
 			matchId,
-			(evt) => {
-				handleMatchEvent(evt);
-				// Once we know the stream is alive, keep it; fallback poll handles missed frames.
-			},
-			() => {
-				stopPolling();
-				matchError = "Live stream disconnected. Falling back to polling.";
-				pollMatch();
-				timer = setInterval(pollMatch, POLL_INTERVAL_MS);
+			(evt) => handleMatchEvent(evt),
+			(status) => {
+				if (phase === "live") {
+					if (status === "connected") matchError = null;
+					else {
+						matchError = "Live stream reconnecting…";
+						reconcileFromDb();
+					}
+				}
 			}
 		);
-
-		// If no SSE data arrives shortly after connecting (e.g. the backend
-		// currently publishes to a different Redis channel), fall back to polling.
-		liveWatchdog = setTimeout(() => {
-			if (liveFen === null && liveSan.length === 0 && liveStatus === "live") {
-				cleanupWatch();
-				liveStatus = "settled";
-				stopPolling();
-				pollMatch();
-				timer = setInterval(pollMatch, POLL_INTERVAL_MS);
-			}
-		}, 5000);
 	}
 
 	async function loadReplay() {
@@ -174,33 +170,30 @@
 		try {
 			matchDetail = await getMatch(matchId);
 		} catch (e) {
-			detailError = e instanceof ApiError ? e.message : "Could not load the match replay.";
+			detailError = e instanceof ApiError ? e.message : "Could not loadthe match replay.";
 		} finally {
 			loadingDetail = false;
 		}
 	}
 
 	async function handlePlay() {
-		if (!playerBotId || !opponentBotId || starting || polling) return;
+		if (!playerBotId || !opponentBotId || starting || phase === "live") return;
 		starting = true;
 		matchError = null;
-		matchStatus = null;
+		phase = "idle";
+		result = null;
+		failedReason = null;
 		matchDetail = null;
 		detailError = null;
-		liveSan = [];
 		liveFen = null;
-		liveStatus = "idle";
+		liveMoves = [];
 		try {
 			const { match_id } = await playMatch({ player_bot_id: playerBotId, opponent_bot_id: opponentBotId });
 			matchId = match_id;
 			matchLabel = `${playerBot?.name ?? "Your bot"} vs ${opponentBot?.name ?? "System bot"}`;
-			attempts = 0;
-			polling = true;
 			startWatch();
-			pollMatch();
-			timer = setInterval(pollMatch, POLL_INTERVAL_MS);
 		} catch (e) {
-			matchError = e instanceof ApiError ? e.message : "Could not start the match.";
+			matchError = e instanceof ApiError ? e.message : "Could not startthe match.";
 		} finally {
 			starting = false;
 		}
@@ -211,10 +204,7 @@
 		await load();
 	});
 
-	onDestroy(() => {
-		cleanupWatch();
-		stopPolling();
-	});
+	onDestroy(cleanupWatch);
 </script>
 
 <div class="container mx-auto max-w-4xl space-y-8 p-6">
@@ -222,7 +212,7 @@
 		<h1 class="flex items-center gap-2 text-3xl font-bold tracking-tight">
 			<Swords class="h-7 w-7 text-primary" /> Play
 		</h1>
-		<p class="text-muted-foreground italic">Challenge a system bot with one of your validated bots.</p>
+		<p class="text-muted-foreground italic">Challengea system bot with one of your validated bots.</p>
 	</header>
 
 	{#if error}
@@ -276,7 +266,7 @@
 				<span class="text-sm text-muted-foreground">Watch the match live as it happens.</span>
 				<Button
 					onclick={handlePlay}
-					disabled={starting || polling || !playerBotId || !opponentBotId}
+					disabled={starting || phase === "live" || !playerBotId || !opponentBotId}
 				>
 					{#if starting}<LoaderCircle class="h-4 w-4 animate-spin" />{/if}
 					Start match
@@ -284,14 +274,14 @@
 			</Card.Footer>
 		</Card.Root>
 
-		{#if matchId || matchStatus || matchError}
+		{#if matchId || phase !== "idle" || matchError}
 			<Card.Root>
 				<Card.Header>
 					<Card.Title>Match</Card.Title>
 					<Card.Description>{matchLabel}</Card.Description>
 				</Card.Header>
 				<Card.Content class="space-y-4">
-					{#if liveStatus === "live" && liveFen && !matchDetail}
+					{#if phase === "live" && liveFen && !matchDetail}
 						<div class="flex items-center gap-2 text-primary">
 							<Radio class="h-4 w-4 animate-pulse" />
 							<span class="text-sm font-medium">Live — streaming moves</span>
@@ -301,26 +291,27 @@
 								<span class="font-medium">{playerBot?.name ?? "White"}</span>
 								<span class="text-muted-foreground">vs</span>
 								<span class="font-medium">{opponentBot?.name ?? "Black"}</span>
-								<span class="text-muted-foreground">· {liveSan.length} move{liveSan.length === 1 ? "" : "s"}</span>
+								<span class="text-muted-foreground">· {liveMoves.length} move{liveMoves.length === 1 ? "" : "s"}</span>
 							</div>
 							<MatchLive fen={liveFen} />
 						</div>
-					{:else}
-						{#if polling || matchStatus?.status === "Pending" || matchStatus?.status === "Running"}
-							<div class="flex items-center gap-2 text-muted-foreground">
-								<LoaderCircle class="h-4 w-4 animate-spin" /> Match in progress…
-							</div>
-						{:else if matchStatus?.status === "Finished"}
-							{#if winnerName}
-								<p class="text-sm">
-									<span class="font-semibold">{winnerName}</span> wins the match.
-								</p>
-							{:else}
-								<p class="text-sm text-muted-foreground">The match ended in a draw.</p>
-							{/if}
-						{:else if matchStatus?.status === "Failed"}
-							<p class="text-sm text-destructive">Failed: {matchStatus.reason}</p>
+					{:else if phase === "live"}
+						<div class="flex items-center gap-2 text-muted-foreground">
+							<LoaderCircle class="h-4 w-4 animate-spin" /> Waiting for the match to start…
+						</div>
+					{:else if phase === "finished"}
+						{#if winnerName}
+							<p class="text-sm">
+								<span class="font-semibold">{winnerName}</span> wins the match.
+							</p>
+						{:else}
+							<p class="text-sm text-muted-foreground">The match ended in a draw.</p>
 						{/if}
+						{#if result?.reason}
+							<p class="text-xs text-muted-foreground">· {result.reason}</p>
+						{/if}
+					{:else if phase === "failed"}
+						<p class="text-sm text-destructive">Failed: {failedReason}</p>
 					{/if}
 					{#if matchError}
 						<p class="mt-2 text-sm text-destructive">{matchError}</p>
@@ -335,7 +326,7 @@
 						</div>
 					{/if}
 				</Card.Content>
-				{#if matchStatus?.status === "Finished" && !matchDetail}
+				{#if phase === "finished" && !matchDetail}
 					<Card.Footer>
 						<Button variant="outline" size="sm" onclick={loadReplay} disabled={loadingDetail}>
 							{#if loadingDetail}<LoaderCircle class="h-4 w-4 animate-spin" />{/if}

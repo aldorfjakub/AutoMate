@@ -52,19 +52,35 @@ pub enum MatchStatus {
     Failed { reason: String },
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(tag = "type")]
+#[derive(Debug, Serialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
 pub enum MatchEvent {
-    Move {
-        san: String,
+    Board {
         fen: String,
         move_number: u32,
+        san: Option<String>,
     },
     Finished {
-        winner: String,
+        outcome: Outcome,
+        winner_name: String,
         reason: String,
+        pgn: String,
     },
     Failed {
         reason: String,
     },
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "lowercase")]
+pub enum Outcome { White, Black, Draw }
+
+impl Outcome {
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::White => "white",
+            Self::Black => "black",
+            Self::Draw => "draw",
+        }
+    }
 }

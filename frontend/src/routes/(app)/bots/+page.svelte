@@ -81,7 +81,7 @@
 			jobs[bot.id] = { jobId: job_id, attempts: 0 };
 			jobs[bot.id].timer = setInterval(() => pollStatus(bot.id ?? ""), POLL_INTERVAL_MS);
 		} catch (e) {
-			if (e instanceof ApiError && e.status === 400) {
+			if (e instanceof ApiError && (e.status === 409 || e.status === 400)) {
 				await load();
 			} else {
 				jobErrors[bot.id] = e instanceof ApiError ? e.message : "Could not start validation.";
