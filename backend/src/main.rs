@@ -1,8 +1,8 @@
 use std::{env, time::Duration};
 
-use crate::routes::app_routes;
+use crate::{handlers::play::start_match, models::dto::{BotInfo, BotSummary}, routes::app_routes};
 use dotenvy::dotenv;
-use redis::Client;
+use redis::{Client, aio::MultiplexedConnection};
 use sqlx::SqlitePool;
 use tokio::time::sleep;
 use uuid::Uuid;
@@ -98,6 +98,44 @@ async fn add_system_bots(db_pool: SqlitePool) {
     let _ = sqlx::query!("INSERT INTO bots (id, name, description, source_code, is_active, is_public, is_system, is_valid) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", new_id, "Random bot", "All moves are pure random", RANDOM_BOT,true, true, true, true).execute(&db_pool).await;
     let new_id = Uuid::from_u128(0xa1a2a3a4b1b2c1c2d1d2d3d4d5d6d7d6u128);
     let _ = sqlx::query!("INSERT INTO bots (id, name, description, source_code, is_active, is_public, is_system, is_valid) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", new_id, "Greedy bot 2", "Takes if he can", GREEDY_BOT,true, true, true, true).execute(&db_pool).await;
+}
+
+async fn schedule_match(db_pool: SqlitePool, redis_conn: MultiplexedConnection) -> Result<(), String> {
+    // Find most suitable bot, then opponetn
+    // then schedule it, and write into redis
+    let bot = match sqlx::query_as!(BotSummary, r#"SELECT id as "id: uuid::Uuid", user_id as "owner_id: uuid::Uuid", name, description, is_active, is_public, is_valid, rating, total_matches FROM bots WHERE is_active = 1 ORDER BY last_played_at ASC LIMIT 1"#)
+        .fetch_optional(&db_pool)
+        .await.map_err(|e| format!("Failed to pull bot from db: {}",e))? {
+            Some(b) => b,
+            None => return Err("No suitable bot found".to_string())
+        };
+
+    // Try with low elo difference then each loop increase the possible difference until opponent is found/no opponent error
+    let bot_id = bot.id.ok_or_else(|| "bot has no id".to_string())?;
+    let mut opponent: Option<BotSummary> = None;
+
+    for i in 1..6u32 {
+        if opponent.is_some() {
+            break;
+        }
+        let rating_min = bot.rating - 150f64 * i as f64;
+        let rating_max = bot.rating + 150f64 * i as f64;
+
+        opponent = sqlx::query_as!(BotSummary, r#"SELECT id as "id: uuid::Uuid", user_id as "owner_id: uuid::Uuid", name, description, is_active, is_public, is_valid, rating, total_matches FROM bots WHERE is_active = 1 AND id != ? AND rating BETWEEN ? AND ? AND id NOT IN (
+      SELECT CASE WHEN white_bot_id = ? THEN black_bot_id ELSE white_bot_id END
+      FROM matches 
+      WHERE white_bot_id = ? OR black_bot_id = ?
+      ORDER BY created_at DESC 
+      LIMIT 3
+  ) ORDER BY RANDOM() LIMIT 1"#, &bot_id, rating_min, rating_max, &bot_id, &bot_id, &bot_id).fetch_optional(&db_pool).await.map_err(|e| format!("Failed to pull bot from db: {}",e))?;
+    }
+
+    let opponent = opponent.ok_or_else(|| "No suitable opponent for bot found".to_string())?;
+
+    start_match(db_pool, redis_conn, bot, opponent, true).await.map_err(|e| format!("{:?}", e))?;
+
+    // TODO entry into redis
+    Ok(())
 }
 
 #[tokio::main]

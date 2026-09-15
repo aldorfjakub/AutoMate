@@ -69,6 +69,7 @@ async fn main() {
                     }
                     Job::Match {
                         match_id,
+                        is_ranked,
                         white_bot_id,
                         black_bot_id,
                     } => {
@@ -91,7 +92,7 @@ async fn main() {
                         let pool_copy = db_pool.clone();
 
                         tokio::spawn(async move {
-                            play_match(&match_id, white_bot_id, black_bot_id, pool_copy, conn_copy)
+                            play_match(&match_id, white_bot_id, black_bot_id, pool_copy, conn_copy, is_ranked)
                                 .await;
                         });
                     }
@@ -105,7 +106,7 @@ async fn main() {
                 continue;
             }
             Err(err) => {
-                eprintln!("Redis BRPOP error: {err}. Retrying in 2 seconds...");
+                //eprintln!("Redis BRPOP error: {err}. Retrying in 2 seconds...");
                 sleep(Duration::from_secs(2)).await;
             }
         }

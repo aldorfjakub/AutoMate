@@ -21,6 +21,7 @@ pub enum Job {
     },
     Match {
         match_id: String,
+        is_ranked: bool,
         white_bot_id: String,
         black_bot_id: String,
     },
@@ -35,10 +36,12 @@ pub struct BotInfo {
     pub is_active: bool,
     pub is_public: bool,
     pub is_valid: bool,
+    pub rating: f64,
+    pub total_matches: i64
 }
 
 pub async fn get_bot(pool: &SqlitePool, id: Uuid) -> Result<Option<BotInfo>, sqlx::Error> {
-    sqlx::query_as!(BotInfo, r#"SELECT id as "id: uuid::Uuid", name, description, is_active, is_public, source_code, is_valid FROM bots WHERE id = ?"#, id)
+    sqlx::query_as!(BotInfo, r#"SELECT id as "id: uuid::Uuid", name, description, is_active, is_public, source_code, is_valid, rating, total_matches FROM bots WHERE id = ?"#, id)
         .fetch_optional(pool)
         .await
 }

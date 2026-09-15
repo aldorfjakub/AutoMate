@@ -1,4 +1,4 @@
-use std::{str::FromStr, time::Duration};
+use std::str::FromStr;
 
 use redis::{AsyncCommands, aio::MultiplexedConnection};
 use shakmaty::{Chess, EnPassantMode, KnownOutcome, Position, fen::Fen, san::San, uci::UciMove};
@@ -63,6 +63,7 @@ struct MatchCtx {
     black_bot_id: Uuid,
     white_bot_name: String,
     black_bot_name: String,
+    is_ranked: bool
 }
 enum MatchEndReason {
     Checkmate,
@@ -95,7 +96,63 @@ struct MatchConclusion {
     error_message: Option<String>,
 }
 
-async fn conclude_match(db_pool: &SqlitePool, match_uuid: Uuid, conclusion: &MatchConclusion) {
+fn elo_k(total_matches: i64) -> f64 {
+    if total_matches < 30 {
+        40.0f64
+    } else {
+        20.0f64
+    }
+}
+
+async fn update_elo(ctx: &mut MatchCtx, winner: Outcome) {
+    let white = match get_bot(&ctx.db_pool, ctx.white_bot_id).await {
+        Ok(Some(bot)) => bot,
+        _ => return,
+    };
+    let black = match get_bot(&ctx.db_pool, ctx.black_bot_id).await {
+        Ok(Some(bot)) => bot,
+        _ => return,
+    };
+
+    let white_score = match winner {
+        Outcome::White => 1.0,
+        Outcome::Black => 0.0,
+        Outcome::Draw => 0.5,
+    };
+
+    let expected_white = 1.0f64 / (1.0f64 + 10.0f64.powf((black.rating - white.rating) / 400.0f64));
+    let expected_black = 1.0 - expected_white;
+
+    let white_change =
+        (elo_k(white.total_matches) * (white_score - expected_white)).round() as i64;
+    let black_change =
+        (elo_k(black.total_matches) * (1.0 - white_score - expected_black)).round() as i64;
+
+    let _ = sqlx::query!(
+        r#"UPDATE bots SET rating = rating + ?, total_matches = total_matches + 1, updated_at = CURRENT_TIMESTAMP, last_played_at = CURRENT_TIMESTAMP WHERE id = ?"#,
+        white_change as f64,
+        ctx.white_bot_id,
+    )
+    .execute(&ctx.db_pool)
+    .await;
+    let _ = sqlx::query!(
+        r#"UPDATE bots SET rating = rating + ?, total_matches = total_matches + 1, updated_at = CURRENT_TIMESTAMP, last_played_at = CURRENT_TIMESTAMP WHERE id = ?"#,
+        black_change as f64,
+        ctx.black_bot_id,
+    )
+    .execute(&ctx.db_pool)
+    .await;
+    let _ = sqlx::query!(
+        "UPDATE matches SET white_elo_change = ?, black_elo_change = ? WHERE id = ?",
+        white_change,
+        black_change,
+        ctx.match_uuid,
+    )
+    .execute(&ctx.db_pool)
+    .await;
+}
+
+async fn conclude_match(ctx: &mut MatchCtx, conclusion: &MatchConclusion) {
     let _ = sqlx::query!(
         r#"UPDATE matches SET
              match_status = 'finished',
@@ -109,10 +166,14 @@ async fn conclude_match(db_pool: &SqlitePool, match_uuid: Uuid, conclusion: &Mat
         conclusion.win_reason,
         conclusion.pgn,
         conclusion.error_message,
-        match_uuid,
+        &ctx.match_uuid,
     )
-    .execute(db_pool)
+    .execute(&ctx.db_pool)
     .await;
+
+    if ctx.is_ranked {
+        update_elo(ctx, conclusion.winner_color.clone()).await;
+    }
 }
 
 fn build_pgn(white_name: &str, black_name: &str, result: &str, moves: &[String]) -> String {
@@ -219,7 +280,7 @@ async fn finish_match(ctx: &mut MatchCtx, redis_winner: String, conclusion: Matc
         .redis_conn
         .publish(format!("matchStream_{}", ctx.match_uuid.to_string()), json)
         .await;
-    conclude_match(&ctx.db_pool, ctx.match_uuid, &conclusion).await;
+    conclude_match(ctx, &conclusion).await;
 }
 
 async fn finish_match_failure(
@@ -256,6 +317,7 @@ pub async fn play_match(
     black_bot_id: Uuid,
     db_pool: SqlitePool,
     mut redis_conn: MultiplexedConnection,
+    is_ranked: bool
 ) {
     let match_uuid = Uuid::from_str(&match_id).expect("Failed to make uuid out of match_id");
     let match_id = format!("match_{}", match_id);
@@ -314,6 +376,7 @@ pub async fn play_match(
         black_bot_id,
         white_bot_name: white_bot_info.name,
         black_bot_name: black_bot_info.name,
+        is_ranked
     };
 
     let mut white_bot = match prepare_bot(&white_bot_source_code, white_bot_info.id).await {
@@ -566,6 +629,6 @@ mod tests {
         assert_eq!(actual, expected);
     }
 
-    
+
 
 }

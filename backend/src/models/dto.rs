@@ -40,6 +40,8 @@ pub struct BotInfo {
     pub is_active: bool,
     pub is_public: bool,
     pub is_valid: bool,
+    pub rating: f64,
+    pub total_matches: i64,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -51,6 +53,8 @@ pub struct BotSummary {
     pub is_active: bool,
     pub is_public: bool,
     pub is_valid: bool,
+    pub rating: f64,
+    pub total_matches: i64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -62,11 +66,11 @@ pub enum Job {
     },
     Match {
         match_id: String,
+        is_ranked: bool,
         white_bot_id: String,
         black_bot_id: String,
     },
 }
-
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "status")]
@@ -82,12 +86,12 @@ pub enum ValidationStatus {
 pub enum MatchStatus {
     Pending,
     Running,
-    Finished {winner: String},
-    Failed {reason: String}
+    Finished { winner: String },
+    Failed { reason: String },
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct MatchRequest{
+pub struct MatchRequest {
     pub player_bot_id: Uuid,
-    pub opponent_bot_id: Uuid
+    pub opponent_bot_id: Uuid,
 }

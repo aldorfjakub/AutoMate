@@ -1,4 +1,4 @@
-use std::{convert::Infallible, sync::Arc, time::Duration};
+use std::{sync::Arc};
 
 use axum::{
     Json, Router,
@@ -11,13 +11,9 @@ use reqwest::StatusCode;
 use serde_json::json;
 use uuid::Uuid;
 
-use axum::response::sse::{Event, KeepAlive, Sse};
-use tokio::sync::mpsc;
-use tokio_stream::{StreamExt, wrappers::ReceiverStream};
 
 use crate::models::{
     dto::{BotInfo, BotSummary, NewBotRequest},
-    matches::Match,
 };
 use crate::state::AppState;
 use crate::{
@@ -26,7 +22,6 @@ use crate::{
 };
 use crate::{
     extract::SessionUser,
-    models::dto::{MatchRequest, MatchStatus},
 };
 
 const MIN_NAME_LEN: usize = 5;
@@ -105,7 +100,7 @@ async fn get_user_bots(
 ) -> AppResult<Json<Vec<BotSummary>>> {
     let bots = sqlx::query_as!(
         BotSummary,
-        r#"SELECT id as "id: uuid::Uuid", user_id as "owner_id: uuid::Uuid", name, description, is_active, is_public, is_valid FROM bots WHERE user_id = ?"#,
+        r#"SELECT id as "id: uuid::Uuid", user_id as "owner_id: uuid::Uuid", name, description, is_active, is_public, is_valid, rating, total_matches FROM bots WHERE user_id = ?"#,
         &session.user_id
     )
     .fetch_all(&state.sqlite_pool)
@@ -139,7 +134,7 @@ async fn get_bot_details(
     session: SessionUser,
 ) -> AppResult<Json<BotInfo>> {
     let bot = sqlx::query_as!(BotInfo,
-            r#"SELECT id as "id: uuid::Uuid", name, description, is_active, is_public, source_code, is_valid FROM bots WHERE id = ? AND user_id = ?"#, &bot_id, &session.user_id)
+            r#"SELECT id as "id: uuid::Uuid", name, description, is_active, is_public, source_code, is_valid, rating, total_matches FROM bots WHERE id = ? AND user_id = ?"#, &bot_id, &session.user_id)
         .fetch_optional(&state.sqlite_pool)
         .await?
         .ok_or(AppError::NotFound)?;
@@ -173,7 +168,7 @@ async fn validate_bot(
     Path(bot_id): Path<Uuid>,
     session: SessionUser,
 ) -> AppResult<Response> {
-    let bot = sqlx::query_as!(BotInfo,r#"SELECT id as "id: uuid::Uuid", name, description, is_active, is_public, source_code, is_valid FROM bots WHERE id = ? AND user_id = ?"#, &bot_id, &session.user_id).fetch_optional(&state.sqlite_pool).await?.ok_or(AppError::NotFound)?;
+    let bot = sqlx::query_as!(BotInfo,r#"SELECT id as "id: uuid::Uuid", name, description, is_active, is_public, source_code, is_valid, rating, total_matches FROM bots WHERE id = ? AND user_id = ?"#, &bot_id, &session.user_id).fetch_optional(&state.sqlite_pool).await?.ok_or(AppError::NotFound)?;
     if bot.is_valid {
         return Err(AppError::Conflict("Bot is already validated."));
     }
@@ -235,7 +230,7 @@ async fn get_system_bots(
     State(state): State<Arc<AppState>>,
     session: SessionUser,
 ) -> AppResult<Json<Vec<BotSummary>>> {
-    let system_bots: Vec<BotSummary> = sqlx::query_as!(BotSummary,r#"SELECT id as "id: uuid::Uuid", user_id as "owner_id: uuid::Uuid", name, description, is_active, is_public, is_valid FROM bots WHERE user_id is NULL"#).fetch_all(&state.sqlite_pool).await?;
+    let system_bots: Vec<BotSummary> = sqlx::query_as!(BotSummary,r#"SELECT id as "id: uuid::Uuid", user_id as "owner_id: uuid::Uuid", name, description, is_active, is_public, is_valid, rating, total_matches FROM bots WHERE user_id is NULL"#).fetch_all(&state.sqlite_pool).await?;
     Ok(Json(system_bots))
 }
 

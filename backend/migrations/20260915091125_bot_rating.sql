@@ -1,0 +1,3 @@
+-- Add migration script here
+ALTER TABLE bots ADD COLUMN rating FLOAT DEFAULT 1000 NOT NULL;
+ALTER TABLE bots ADD COLUMN total_matches INTEGER DEFAULT 0 NOT NULL;
