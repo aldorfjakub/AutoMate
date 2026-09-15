@@ -188,7 +188,9 @@ async fn fail_match(
     )
     .await;
 
-    let event: MatchEvent = MatchEvent::Failed { reason: reason.as_str().to_string() };
+    let event: MatchEvent = MatchEvent::Failed {
+        reason: reason.as_str().to_string(),
+    };
     let json = serde_json::to_string(&event).expect("failed to serialize match event");
     let _: Result<(), redis::RedisError> = ctx
         .redis_conn
@@ -486,4 +488,84 @@ pub async fn play_match(
 
     kill_bot(&mut white_bot).await;
     kill_bot(&mut black_bot).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn to_moves(slice: &[&str]) -> Vec<String> {
+        slice.iter().map(|&s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn test_pgn_standard_two_full_turns() {
+        let moves = to_moves(&["e4", "e5", "Nf3", "Nc6"]);
+        let actual = build_pgn("BotAlpha", "BotBeta", "1-0", &moves);
+
+        let expected = "\
+[Event \"?\"]
+[White \"BotAlpha\"]
+[Black \"BotBeta\"]
+[Result \"1-0\"]
+
+1. e4 e5
+2. Nf3 Nc6";
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_pgn_odd_number_of_moves() {
+        // Game ends on White's turn (e.g., Black resigned or timed out after Qh5)
+        let moves = to_moves(&["e4", "e5", "Qh5"]);
+        let actual = build_pgn("AggroBot", "DefensiveBot", "1-0", &moves);
+
+        let expected = "\
+[Event \"?\"]
+[White \"AggroBot\"]
+[Black \"DefensiveBot\"]
+[Result \"1-0\"]
+
+1. e4 e5
+2. Qh5";
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_pgn_empty_moves() {
+        // Edge case: Bot failed validation or forfeited before Move 1
+        let moves: Vec<String> = vec![];
+        let actual = build_pgn("Alice", "Bob", "*", &moves);
+
+        let expected = "\
+[Event \"?\"]
+[White \"Alice\"]
+[Black \"Bob\"]
+[Result \"*\"]
+
+";
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_pgn_single_move() {
+        let moves = to_moves(&["d4"]);
+        let actual = build_pgn("Bot1", "Bot2", "0-1", &moves);
+
+        let expected = "\
+[Event \"?\"]
+[White \"Bot1\"]
+[Black \"Bot2\"]
+[Result \"0-1\"]
+
+1. d4";
+
+        assert_eq!(actual, expected);
+    }
+
+    
+
 }
