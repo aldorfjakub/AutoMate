@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::models::matches::Match;
+
 #[derive(Deserialize)]
 pub struct OAuthRequest {
     pub code: String,
@@ -94,4 +96,14 @@ pub enum MatchStatus {
 pub struct MatchRequest {
     pub player_bot_id: Uuid,
     pub opponent_bot_id: Uuid,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct RankedMatch {
+    #[serde(flatten)]
+    pub m: Match,
+    pub white_name: String,
+    pub black_name: String,
+    pub white_rating: f64,
+    pub black_rating: f64,
 }

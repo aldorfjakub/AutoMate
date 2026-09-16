@@ -12,6 +12,8 @@ export interface BotSummary {
 	is_active: boolean;
 	is_public: boolean;
 	is_valid: boolean;
+	rating: number;
+	total_matches: number;
 }
 
 export interface BotInfo extends BotSummary {
@@ -70,4 +72,11 @@ export interface Match {
 	error_message: string | null;
 	created_at: string | null;
 	completed_at: string | null;
+}
+
+export interface RankedMatch extends Match {
+	white_name: string;
+	black_name: string;
+	white_rating: number;
+	black_rating: number;
 }

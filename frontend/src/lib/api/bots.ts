@@ -6,6 +6,7 @@ import type {
 	MatchEvent,
 	MatchRequest,
 	NewBotRequest,
+	RankedMatch,
 	PlayMatchResponse,
 	ValidateBotResponse,
 	ValidationStatus
@@ -102,6 +103,11 @@ export function getMatch(matchId: string): Promise<Match> {
 
 export function listMatches(): Promise<Match[]> {
 	return request<Match[]>("/api/matches");
+}
+
+// 404 (ApiError with status === 404) means no ranked match is scheduled/playing right now.
+export function getRankedMatch(): Promise<RankedMatch> {
+	return request<RankedMatch>("/api/matches/ranked");
 }
 
 // Realtime match stream. The SSE endpoint sends `event: match` lines whose data

@@ -15,6 +15,7 @@ use tokio_stream::{StreamExt, wrappers::ReceiverStream};
 
 use crate::error::{AppError, AppResult};
 use crate::extract::SessionUser;
+use crate::models::dto::{BotSummary, RankedMatch};
 use crate::models::matches::Match;
 use crate::state::AppState;
 
@@ -50,6 +51,49 @@ async fn get_matches(
 "#, &session.user_id).fetch_all(&state.sqlite_pool).await?;
 
 Ok(Json(matches))
+}
+
+async fn get_ranked_match(
+    State(state): State<Arc<AppState>>,
+) -> AppResult<impl IntoResponse>{
+    let ranked_match = match sqlx::query_as!(Match, r#"SELECT  m.id AS "id: uuid::Uuid",
+            m.white_bot_id AS "white_bot_id: Uuid",
+            m.black_bot_id AS "black_bot_id: Uuid",
+            m.match_status,
+            m.is_ranked,
+            m.winner_color,
+            m.win_reason,
+            m.pgn,
+            m.white_elo_change,
+            m.black_elo_change,
+            m.error_message,
+            m.created_at,
+            m.completed_at
+        FROM matches m WHERE is_ranked = 1 AND match_status IN ("pending", "playing") LIMIT 1"#).fetch_optional(&state.sqlite_pool).await?
+        {
+                Some(m) => m,
+                None => return Err(AppError::NotFound)
+        };
+
+    let white_bot = sqlx::query_as!(BotSummary, r#"SELECT id as "id: uuid::Uuid", user_id as "owner_id: uuid::Uuid", name, description, is_active, is_public, is_valid, rating, total_matches FROM bots WHERE id = ?"#, &ranked_match.white_bot_id).fetch_optional(&state.sqlite_pool).await?;
+    let black_bot = sqlx::query_as!(BotSummary, r#"SELECT id as "id: uuid::Uuid", user_id as "owner_id: uuid::Uuid", name, description, is_active, is_public, is_valid, rating, total_matches FROM bots WHERE id = ?"#, &ranked_match.black_bot_id).fetch_optional(&state.sqlite_pool).await?;
+
+    let (white_name, white_rating) = match white_bot {
+        Some(b) => (b.name, b.rating),
+        None => ("Unknown".to_string(), 0f64),
+    };
+    let (black_name, black_rating) = match black_bot {
+        Some(b) => (b.name, b.rating),
+        None => ("Unknown".to_string(), 0f64),
+    };
+
+    Ok(Json(RankedMatch {
+        m: ranked_match,
+        white_name,
+        black_name,
+        white_rating,
+        black_rating,
+    }))
 }
 
 async fn get_match_result(
@@ -120,4 +164,6 @@ pub fn matches_routes() -> Router<Arc<AppState>> {
         .route("/", get(get_matches))
         .route("/{match_id}", get(get_match_result))
         .route("/{match_id}/watch", get(watch_match))
+        .route("/ranked", get(get_ranked_match))
+    
 }

@@ -7,6 +7,7 @@
 	import { deleteBot, listBots, validateBot, getValidationStatus, ApiError } from "$lib/api/bots";
 	import type { BotSummary } from "$lib/types";
 	import { Bot, Code2, Trash2, Pencil, Plus, LoaderCircle, Swords } from "lucide-svelte";
+	import RankedMatchWindow from "$lib/components/ranked-match-window.svelte";
 
 	type JobState = {
 		jobId: string;
@@ -117,6 +118,8 @@
 </script>
 
 <div class="container mx-auto max-w-6xl space-y-8 p-6">
+	<RankedMatchWindow />
+
 	<header class="flex items-center justify-between gap-4">
 		<div class="space-y-1">
 			<h1 class="flex items-center gap-2 text-3xl font-bold tracking-tight">
