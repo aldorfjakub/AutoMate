@@ -2,6 +2,7 @@ import { API_BASE, parseApiError } from "../api";
 import type {
 	BotInfo,
 	BotSummary,
+	LeaderboardResponse,
 	Match,
 	MatchEvent,
 	MatchRequest,
@@ -108,6 +109,10 @@ export function listMatches(): Promise<Match[]> {
 // 404 (ApiError with status === 404) means no ranked match is scheduled/playing right now.
 export function getRankedMatch(): Promise<RankedMatch> {
 	return request<RankedMatch>("/api/matches/ranked");
+}
+
+export function getLeaderboard(page = 1, pageSize = 20): Promise<LeaderboardResponse> {
+	return request<LeaderboardResponse>(`/api/leaderboard?page=${page}&page_size=${pageSize}`);
 }
 
 // Realtime match stream. The SSE endpoint sends `event: match` lines whose data

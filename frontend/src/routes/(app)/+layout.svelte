@@ -3,7 +3,7 @@
 	import { Button } from "$lib/components/ui/button";
 	import * as Avatar from "$lib/components/ui/avatar";
 	import { auth, checkAuth, logout } from "$lib/auth.svelte";
-	import { Bot, LogOut, Swords, History } from "lucide-svelte";
+	import { Bot, LogOut, Swords, History, Trophy } from "lucide-svelte";
 
 	let { children } = $props();
 
@@ -45,6 +45,12 @@
 					class="flex items-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
 				>
 					<History class="h-4 w-4" /> Matches
+				</a>
+				<a
+					href="/leaderboard"
+					class="flex items-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+				>
+					<Trophy class="h-4 w-4" /> Leaderboard
 				</a>
 				<Avatar.Root class="h-8 w-8 border border-border/60">
 					{#if auth.user?.avatar_url}

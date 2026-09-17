@@ -72,6 +72,10 @@ export interface Match {
 	error_message: string | null;
 	created_at: string | null;
 	completed_at: string | null;
+	white_name?: string | null;
+	black_name?: string | null;
+	white_rating?: number | null;
+	black_rating?: number | null;
 }
 
 export interface RankedMatch extends Match {
@@ -79,4 +83,21 @@ export interface RankedMatch extends Match {
 	black_name: string;
 	white_rating: number;
 	black_rating: number;
+}
+
+export interface LeaderboardEntry {
+	rank: number;
+	bot_id: string;
+	name: string;
+	rating: number;
+	total_matches: number;
+	author: string | null;
+}
+
+export interface LeaderboardResponse {
+	items: LeaderboardEntry[];
+	page: number;
+	page_size: number;
+	total: number;
+	total_pages: number;
 }

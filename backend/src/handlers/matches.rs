@@ -15,7 +15,7 @@ use tokio_stream::{StreamExt, wrappers::ReceiverStream};
 
 use crate::error::{AppError, AppResult};
 use crate::extract::SessionUser;
-use crate::models::dto::{BotSummary, RankedMatch};
+use crate::models::dto::{BotSummary, MatchWithBots, RankedMatch};
 use crate::models::matches::Match;
 use crate::state::AppState;
 
@@ -23,10 +23,10 @@ async fn get_matches(
     State(state): State<Arc<AppState>>,
     session: SessionUser,
 ) -> AppResult<impl IntoResponse> {
-    let matches: Vec<Match> = sqlx::query_as!(
-        Match,
+    let matches: Vec<MatchWithBots> = sqlx::query_as!(
+        MatchWithBots,
         r#"
-        SELECT 
+        SELECT
             m.id AS "id: uuid::Uuid",
             m.white_bot_id AS "white_bot_id: Uuid",
             m.black_bot_id AS "black_bot_id: Uuid",
@@ -39,24 +39,34 @@ async fn get_matches(
             m.black_elo_change,
             m.error_message,
             m.created_at,
-            m.completed_at
+            m.completed_at,
+            w.name AS white_name,
+            b.name AS black_name,
+            w.rating AS white_rating,
+            b.rating AS black_rating
         FROM matches m
+        LEFT JOIN bots w ON w.id = m.white_bot_id
+        LEFT JOIN bots b ON b.id = m.black_bot_id
         WHERE EXISTS (
             SELECT 1 
-            FROM bots b
-            WHERE b.user_id = ?
-            AND (b.id = m.white_bot_id OR b.id = m.black_bot_id)
+            FROM bots owned
+            WHERE owned.user_id = ?
+            AND (owned.id = m.white_bot_id OR owned.id = m.black_bot_id)
         )
         ORDER BY m.created_at DESC
-"#, &session.user_id).fetch_all(&state.sqlite_pool).await?;
+"#,
+        &session.user_id
+    )
+    .fetch_all(&state.sqlite_pool)
+    .await?;
 
-Ok(Json(matches))
+    Ok(Json(matches))
 }
 
-async fn get_ranked_match(
-    State(state): State<Arc<AppState>>,
-) -> AppResult<impl IntoResponse>{
-    let ranked_match = match sqlx::query_as!(Match, r#"SELECT  m.id AS "id: uuid::Uuid",
+async fn get_ranked_match(State(state): State<Arc<AppState>>) -> AppResult<impl IntoResponse> {
+    let ranked_match = match sqlx::query_as!(
+        Match,
+        r#"SELECT  m.id AS "id: uuid::Uuid",
             m.white_bot_id AS "white_bot_id: Uuid",
             m.black_bot_id AS "black_bot_id: Uuid",
             m.match_status,
@@ -69,11 +79,14 @@ async fn get_ranked_match(
             m.error_message,
             m.created_at,
             m.completed_at
-        FROM matches m WHERE is_ranked = 1 AND match_status IN ("pending", "playing") LIMIT 1"#).fetch_optional(&state.sqlite_pool).await?
-        {
-                Some(m) => m,
-                None => return Err(AppError::NotFound)
-        };
+        FROM matches m WHERE is_ranked = 1 AND match_status IN ("pending", "playing") LIMIT 1"#
+    )
+    .fetch_optional(&state.sqlite_pool)
+    .await?
+    {
+        Some(m) => m,
+        None => return Err(AppError::NotFound),
+    };
 
     let white_bot = sqlx::query_as!(BotSummary, r#"SELECT id as "id: uuid::Uuid", user_id as "owner_id: uuid::Uuid", name, description, is_active, is_public, is_valid, rating, total_matches FROM bots WHERE id = ?"#, &ranked_match.white_bot_id).fetch_optional(&state.sqlite_pool).await?;
     let black_bot = sqlx::query_as!(BotSummary, r#"SELECT id as "id: uuid::Uuid", user_id as "owner_id: uuid::Uuid", name, description, is_active, is_public, is_valid, rating, total_matches FROM bots WHERE id = ?"#, &ranked_match.black_bot_id).fetch_optional(&state.sqlite_pool).await?;
@@ -165,5 +178,4 @@ pub fn matches_routes() -> Router<Arc<AppState>> {
         .route("/{match_id}", get(get_match_result))
         .route("/{match_id}/watch", get(watch_match))
         .route("/ranked", get(get_ranked_match))
-    
 }
