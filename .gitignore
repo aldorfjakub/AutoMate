@@ -5,4 +5,7 @@ target/
 *.sqlite
 node_modules/
 
+# Redis
+*.rdb
+
 .env

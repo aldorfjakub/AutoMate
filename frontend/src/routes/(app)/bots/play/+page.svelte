@@ -170,7 +170,7 @@
 		try {
 			matchDetail = await getMatch(matchId);
 		} catch (e) {
-			detailError = e instanceof ApiError ? e.message : "Could not loadthe match replay.";
+			detailError = e instanceof ApiError ? e.message : "Could not load the match replay.";
 		} finally {
 			loadingDetail = false;
 		}
@@ -193,7 +193,7 @@
 			matchLabel = `${playerBot?.name ?? "Your bot"} vs ${opponentBot?.name ?? "System bot"}`;
 			startWatch();
 		} catch (e) {
-			matchError = e instanceof ApiError ? e.message : "Could not startthe match.";
+			matchError = e instanceof ApiError ? e.message : "Could not start the match.";
 		} finally {
 			starting = false;
 		}
