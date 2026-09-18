@@ -256,3 +256,63 @@ pub fn bots_routes() -> Router<Arc<AppState>> {
 // /play/ - (own_bot_id, system_bot_id)
 // get playable bots - (return list of bots from system database)
 // /watch/ connect to the soc ket or somethign
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn req(name: &str, desc: Option<&str>, source: &str) -> NewBotRequest {
+        NewBotRequest {
+            name: name.to_string(),
+            description: desc.map(|s| s.to_string()),
+            source_code: source.to_string(),
+            is_active: true,
+            is_public: true,
+        }
+    }
+
+    fn long(n: usize) -> String {
+        "x".repeat(n)
+    }
+
+    #[test]
+    fn accepts_valid_payload() {
+        assert!(validate_payload(&req("TestBot", None, "# a valid python bot source\n")).is_ok());
+        assert!(validate_payload(
+            &req("TestBot", Some("desc"), "import chess\n\ndef get_chess_move(fen):\n    return 'e2e4'\n")
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn rejects_short_and_long_names() {
+        assert!(matches!(
+            validate_payload(&req("ab", None, "# bot\n")),
+            Err(AppError::BadRequest(_))
+        ));
+        assert!(matches!(
+            validate_payload(&req(&long(33), None, "# bot\n")),
+            Err(AppError::BadRequest(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_long_description() {
+        assert!(matches!(
+            validate_payload(&req("TestBot", Some(&long(811)), "# bot\n")),
+            Err(AppError::BadRequest(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_empty_and_too_large_source() {
+        assert!(matches!(
+            validate_payload(&req("TestBot", None, "x")),
+            Err(AppError::BadRequest(_))
+        ));
+        assert!(matches!(
+            validate_payload(&req("TestBot", None, &long(131_073))),
+            Err(AppError::BadRequest(_))
+        ));
+    }
+}

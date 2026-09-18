@@ -17,6 +17,7 @@ use uuid::Uuid;
 use crate::{matches::play_match, models::Job, validate::validate_bot};
 
 mod bot;
+mod elo;
 mod matches;
 mod models;
 mod validate;

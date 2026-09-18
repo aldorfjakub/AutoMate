@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::{
     bot::{kill_bot, prepare_bot, read_move},
-    models::*,
+    elo, models::*,
 };
 
 async fn publish_match_status(
@@ -96,14 +96,6 @@ struct MatchConclusion {
     error_message: Option<String>,
 }
 
-fn elo_k(total_matches: i64) -> f64 {
-    if total_matches < 30 {
-        40.0f64
-    } else {
-        20.0f64
-    }
-}
-
 async fn update_elo(ctx: &mut MatchCtx, winner: Outcome) {
     let white = match get_bot(&ctx.db_pool, ctx.white_bot_id).await {
         Ok(Some(bot)) => bot,
@@ -119,14 +111,22 @@ async fn update_elo(ctx: &mut MatchCtx, winner: Outcome) {
         Outcome::Black => 0.0,
         Outcome::Draw => 0.5,
     };
+    let black_score = 1.0 - white_score;
 
-    let expected_white = 1.0f64 / (1.0f64 + 10.0f64.powf((black.rating - white.rating) / 400.0f64));
-    let expected_black = 1.0 - expected_white;
-
-    let white_change =
-        (elo_k(white.total_matches) * (white_score - expected_white)).round() as i64;
-    let black_change =
-        (elo_k(black.total_matches) * (1.0 - white_score - expected_black)).round() as i64;
+    let white_change = (elo::rating_delta(
+        white.rating,
+        black.rating,
+        white_score,
+        elo::k_factor(white.total_matches),
+    ))
+    .round() as i64;
+    let black_change = (elo::rating_delta(
+        black.rating,
+        white.rating,
+        black_score,
+        elo::k_factor(black.total_matches),
+    ))
+    .round() as i64;
 
     let _ = sqlx::query!(
         r#"UPDATE bots SET rating = rating + ?, total_matches = total_matches + 1, updated_at = CURRENT_TIMESTAMP, last_played_at = CURRENT_TIMESTAMP WHERE id = ?"#,

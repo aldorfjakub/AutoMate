@@ -135,6 +135,17 @@ pub async fn kill_bot(prepared: &mut PreparedBot) {
     let _ = timeout(Duration::from_secs(2), prepared.process.wait()).await;
 }
 
+fn parse_move_line(line: &str) -> Option<Result<String, String>> {
+    let line = line.trim();
+    if let Some(uci) = line.strip_prefix("move:") {
+        Some(Ok(uci.trim().to_string()))
+    } else if line.starts_with("ERROR") {
+        Some(Err(line.to_string()))
+    } else {
+        None
+    }
+}
+
 pub async fn read_move(reader: &mut BufReader<ChildStdout>) -> Result<String, String> {
     let mut line = String::new();
     let deadline = Instant::now() + Duration::from_millis(1200);
@@ -158,14 +169,36 @@ pub async fn read_move(reader: &mut BufReader<ChildStdout>) -> Result<String, St
         }
 
         let trimmed = line.trim();
-        if let Some(uci) = trimmed.strip_prefix("move:") {
-            return Ok(uci.into());
-        }
-
-        if trimmed.starts_with("ERROR") {
-            println!("{}", trimmed);
-            return Err(trimmed.into());
+        match parse_move_line(trimmed) {
+            Some(Ok(uci)) => return Ok(uci),
+            Some(Err(msg)) => {
+                println!("{}", msg);
+                return Err(msg);
+            }
+            None => {}
         }
     }
     Err("Bot has outputed too many lines".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_move_line() {
+        assert_eq!(parse_move_line("move: e2e4"), Some(Ok("e2e4".to_string())));
+        assert_eq!(parse_move_line("  move:  d2d4  "), Some(Ok("d2d4".to_string())));
+    }
+
+    #[test]
+    fn parses_error_line() {
+        assert!(matches!(parse_move_line("ERROR: boom"), Some(Err(e)) if e == "ERROR: boom"));
+    }
+
+    #[test]
+    fn ignores_junk_lines() {
+        assert_eq!(parse_move_line("received: rnbqkbnr..."), None);
+        assert_eq!(parse_move_line(""), None);
+    }
 }
