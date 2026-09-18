@@ -99,7 +99,6 @@ async fn oauth_callback(
         .await
         .map_err(|e| AppError::External(e.to_string()))?;
     let token = content.access_token;
-    println!("{}", token);
 
     let res2 = client
         .get(OAUTH_USER_URL)
