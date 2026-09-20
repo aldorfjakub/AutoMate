@@ -1,0 +1,122 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id as \"id: uuid::Uuid\", user_id as \"owner_id: uuid::Uuid\", name, description, is_active, is_public, is_valid, rating, total_matches FROM bots WHERE is_active = 1 AND is_valid = 1 AND id != ? AND rating BETWEEN ? AND ? AND id NOT IN (\n      SELECT CASE WHEN white_bot_id = ? THEN black_bot_id ELSE white_bot_id END\n      FROM matches \n      WHERE white_bot_id = ? OR black_bot_id = ?\n      ORDER BY created_at DESC \n      LIMIT 3\n  )  AND (user_id IS NULL OR user_id != ?) ORDER BY RANDOM() LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "name": "id: uuid::Uuid",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "bots",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "owner_id: uuid::Uuid",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "bots",
+            "name": "user_id"
+          }
+        }
+      },
+      {
+        "name": "name",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "bots",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "description",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "bots",
+            "name": "description"
+          }
+        }
+      },
+      {
+        "name": "is_active",
+        "ordinal": 4,
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "bots",
+            "name": "is_active"
+          }
+        }
+      },
+      {
+        "name": "is_public",
+        "ordinal": 5,
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "bots",
+            "name": "is_public"
+          }
+        }
+      },
+      {
+        "name": "is_valid",
+        "ordinal": 6,
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "bots",
+            "name": "is_valid"
+          }
+        }
+      },
+      {
+        "name": "rating",
+        "ordinal": 7,
+        "type_info": "Float",
+        "origin": {
+          "Table": {
+            "table": "bots",
+            "name": "rating"
+          }
+        }
+      },
+      {
+        "name": "total_matches",
+        "ordinal": 8,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "bots",
+            "name": "total_matches"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": [
+      true,
+      true,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "508a07028b6054bcdde74f7e7c507f9a867522937c292608288e575902b714d2"
+}

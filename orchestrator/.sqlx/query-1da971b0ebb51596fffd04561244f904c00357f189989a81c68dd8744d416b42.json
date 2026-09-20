@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE bots SET is_valid = ? WHERE id = ? AND source_code = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "1da971b0ebb51596fffd04561244f904c00357f189989a81c68dd8744d416b42"
+}

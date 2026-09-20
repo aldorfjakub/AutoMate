@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE matches SET\n             match_status = 'finished',\n             winner_color = ?,\n             win_reason = ?,\n             pgn = ?,\n             error_message = ?,\n             completed_at = CURRENT_TIMESTAMP\n           WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "5e6ebd6541d8afe1aaea4591a07b379d313c8085047075f154fda390d25454d7"
+}

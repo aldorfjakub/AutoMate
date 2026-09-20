@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO bots (id, name, description, source_code, is_active, is_public, is_system, is_valid)\n               VALUES (?, ?, ?, ?, 1, 1, 1, 1)\n               ON CONFLICT(id) DO UPDATE SET\n                   name = excluded.name,\n                   description = excluded.description,\n                   source_code = excluded.source_code,\n                   is_active = 1,\n                   is_public = 1,\n                   is_valid = 1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "d3b8e6cce0466e924a1f7943f0e57ded15b254660c65fa119358da22d48c9a85"
+}

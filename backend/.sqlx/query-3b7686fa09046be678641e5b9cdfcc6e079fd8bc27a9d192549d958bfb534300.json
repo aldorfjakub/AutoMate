@@ -1,0 +1,218 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        SELECT\n            m.id AS \"id: uuid::Uuid\",\n            m.white_bot_id AS \"white_bot_id: Uuid\",\n            m.black_bot_id AS \"black_bot_id: Uuid\",\n            m.match_status,\n            m.is_ranked,\n            m.winner_color,\n            m.win_reason,\n            m.pgn,\n            m.white_elo_change,\n            m.black_elo_change,\n            m.error_message,\n            m.created_at,\n            m.completed_at,\n            w.name AS white_name,\n            b.name AS black_name,\n            w.rating AS white_rating,\n            b.rating AS black_rating\n        FROM matches m\n        LEFT JOIN bots w ON w.id = m.white_bot_id\n        LEFT JOIN bots b ON b.id = m.black_bot_id\n        WHERE EXISTS (\n            SELECT 1 \n            FROM bots owned\n            WHERE owned.user_id = ?\n            AND (owned.id = m.white_bot_id OR owned.id = m.black_bot_id)\n        )\n        ORDER BY m.created_at DESC\n",
+  "describe": {
+    "columns": [
+      {
+        "name": "id: uuid::Uuid",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "matches",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "white_bot_id: Uuid",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "matches",
+            "name": "white_bot_id"
+          }
+        }
+      },
+      {
+        "name": "black_bot_id: Uuid",
+        "ordinal": 2,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "matches",
+            "name": "black_bot_id"
+          }
+        }
+      },
+      {
+        "name": "match_status",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "matches",
+            "name": "match_status"
+          }
+        }
+      },
+      {
+        "name": "is_ranked",
+        "ordinal": 4,
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "matches",
+            "name": "is_ranked"
+          }
+        }
+      },
+      {
+        "name": "winner_color",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "matches",
+            "name": "winner_color"
+          }
+        }
+      },
+      {
+        "name": "win_reason",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "matches",
+            "name": "win_reason"
+          }
+        }
+      },
+      {
+        "name": "pgn",
+        "ordinal": 7,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "matches",
+            "name": "pgn"
+          }
+        }
+      },
+      {
+        "name": "white_elo_change",
+        "ordinal": 8,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "matches",
+            "name": "white_elo_change"
+          }
+        }
+      },
+      {
+        "name": "black_elo_change",
+        "ordinal": 9,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "matches",
+            "name": "black_elo_change"
+          }
+        }
+      },
+      {
+        "name": "error_message",
+        "ordinal": 10,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "matches",
+            "name": "error_message"
+          }
+        }
+      },
+      {
+        "name": "created_at",
+        "ordinal": 11,
+        "type_info": "Datetime",
+        "origin": {
+          "Table": {
+            "table": "matches",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "completed_at",
+        "ordinal": 12,
+        "type_info": "Datetime",
+        "origin": {
+          "Table": {
+            "table": "matches",
+            "name": "completed_at"
+          }
+        }
+      },
+      {
+        "name": "white_name",
+        "ordinal": 13,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "bots",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "black_name",
+        "ordinal": 14,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "bots",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "white_rating",
+        "ordinal": 15,
+        "type_info": "Float",
+        "origin": {
+          "Table": {
+            "table": "bots",
+            "name": "rating"
+          }
+        }
+      },
+      {
+        "name": "black_rating",
+        "ordinal": 16,
+        "type_info": "Float",
+        "origin": {
+          "Table": {
+            "table": "bots",
+            "name": "rating"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "3b7686fa09046be678641e5b9cdfcc6e079fd8bc27a9d192549d958bfb534300"
+}

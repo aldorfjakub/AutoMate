@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE matches SET white_elo_change = ?, black_elo_change = ? WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "ed4353992f713925a58f2891038c391ec4e043980bc678e1c79b0fbdb58d24e3"
+}

@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT source_code, is_valid FROM bots WHERE id = ? AND user_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "source_code",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "bots",
+            "name": "source_code"
+          }
+        }
+      },
+      {
+        "name": "is_valid",
+        "ordinal": 1,
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "bots",
+            "name": "is_valid"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "84406f0893ee5e5c7ba545472a55af1f5d51c91d82cee72c54703581bd16747d"
+}

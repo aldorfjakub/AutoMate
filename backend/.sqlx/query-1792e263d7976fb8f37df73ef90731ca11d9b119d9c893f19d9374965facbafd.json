@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "\n                    SELECT \n                        display_name, \n                        avatar_url\n                    FROM users\n                    WHERE id = ? \n                ",
+  "describe": {
+    "columns": [
+      {
+        "name": "display_name",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "display_name"
+          }
+        }
+      },
+      {
+        "name": "avatar_url",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "avatar_url"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "1792e263d7976fb8f37df73ef90731ca11d9b119d9c893f19d9374965facbafd"
+}

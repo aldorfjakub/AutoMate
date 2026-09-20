@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE matches SET match_status = 'playing' WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "912f8ec12f2d7ffc28faf04d38a342e65fcd776ffca209dcefc43bd97ba127ad"
+}

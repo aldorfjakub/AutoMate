@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE bots SET rating = rating + ?, total_matches = total_matches + 1, updated_at = CURRENT_TIMESTAMP, last_played_at = CURRENT_TIMESTAMP WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "05b968e69b10d091d7c01751cfc0828086dc49dae8c07c27019d2e51f721f7c0"
+}

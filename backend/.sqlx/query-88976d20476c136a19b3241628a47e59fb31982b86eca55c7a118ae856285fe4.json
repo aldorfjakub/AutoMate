@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO matches (id, white_bot_id, black_bot_id, is_ranked) VALUES (?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "88976d20476c136a19b3241628a47e59fb31982b86eca55c7a118ae856285fe4"
+}

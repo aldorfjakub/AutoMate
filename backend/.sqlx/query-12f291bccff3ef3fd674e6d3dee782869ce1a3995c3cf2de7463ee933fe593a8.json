@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE matches SET match_status = 'failed' WHERE match_status IN (\"pending\", \"playing\") AND completed_at IS NULL AND created_at < datetime('now', '-15 minutes')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "12f291bccff3ef3fd674e6d3dee782869ce1a3995c3cf2de7463ee933fe593a8"
+}

@@ -1,0 +1,122 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id as \"id: uuid::Uuid\", name, description, is_active, is_public, source_code, is_valid, rating, total_matches FROM bots WHERE id = ? AND user_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "id: uuid::Uuid",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "bots",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "name",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "bots",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "description",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "bots",
+            "name": "description"
+          }
+        }
+      },
+      {
+        "name": "is_active",
+        "ordinal": 3,
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "bots",
+            "name": "is_active"
+          }
+        }
+      },
+      {
+        "name": "is_public",
+        "ordinal": 4,
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "bots",
+            "name": "is_public"
+          }
+        }
+      },
+      {
+        "name": "source_code",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "bots",
+            "name": "source_code"
+          }
+        }
+      },
+      {
+        "name": "is_valid",
+        "ordinal": 6,
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "bots",
+            "name": "is_valid"
+          }
+        }
+      },
+      {
+        "name": "rating",
+        "ordinal": 7,
+        "type_info": "Float",
+        "origin": {
+          "Table": {
+            "table": "bots",
+            "name": "rating"
+          }
+        }
+      },
+      {
+        "name": "total_matches",
+        "ordinal": 8,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "bots",
+            "name": "total_matches"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      true,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "eb8311a0391781c5b7bd6377b129285af015a199cfaa7d4805bc57732f64b5c9"
+}
