@@ -1,0 +1,7 @@
+# Starts a Redis container for local development.
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: automate-redis
+    ports:
+      - "6379:6379"
