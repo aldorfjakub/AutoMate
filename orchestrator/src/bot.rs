@@ -188,7 +188,10 @@ mod tests {
     #[test]
     fn parses_move_line() {
         assert_eq!(parse_move_line("move: e2e4"), Some(Ok("e2e4".to_string())));
-        assert_eq!(parse_move_line("  move:  d2d4  "), Some(Ok("d2d4".to_string())));
+        assert_eq!(
+            parse_move_line("  move:  d2d4  "),
+            Some(Ok("d2d4".to_string()))
+        );
     }
 
     #[test]

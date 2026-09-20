@@ -8,7 +8,8 @@ use uuid::Uuid;
 
 use crate::{
     bot::{kill_bot, prepare_bot, read_move},
-    elo, models::*,
+    elo,
+    models::*,
 };
 
 async fn publish_match_status(
@@ -63,7 +64,7 @@ struct MatchCtx {
     black_bot_id: Uuid,
     white_bot_name: String,
     black_bot_name: String,
-    is_ranked: bool
+    is_ranked: bool,
 }
 enum MatchEndReason {
     Checkmate,
@@ -317,7 +318,7 @@ pub async fn play_match(
     black_bot_id: Uuid,
     db_pool: SqlitePool,
     mut redis_conn: MultiplexedConnection,
-    is_ranked: bool
+    is_ranked: bool,
 ) {
     let match_uuid = Uuid::from_str(&match_id).expect("Failed to make uuid out of match_id");
     let match_id = format!("match_{}", match_id);
@@ -376,7 +377,7 @@ pub async fn play_match(
         black_bot_id,
         white_bot_name: white_bot_info.name,
         black_bot_name: black_bot_info.name,
-        is_ranked
+        is_ranked,
     };
 
     let mut white_bot = match prepare_bot(&white_bot_source_code, white_bot_info.id).await {
@@ -628,7 +629,4 @@ mod tests {
 
         assert_eq!(actual, expected);
     }
-
-
-
 }

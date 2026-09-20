@@ -7,21 +7,17 @@ use axum::{
 };
 use redis::AsyncCommands;
 
-
-
+use crate::extract::SessionUser;
 use crate::state::AppState;
 use crate::{
     error::{AppError, AppResult},
     models::dto::ValidationStatus,
 };
-use crate::{
-    extract::SessionUser,
-};
 
 async fn get_job_status(
     State(state): State<Arc<AppState>>,
     Path(job_id): Path<String>,
-    session: SessionUser,
+    _session: SessionUser,
 ) -> AppResult<Json<ValidationStatus>> {
     let mut redis_conn: redis::aio::MultiplexedConnection = state.redis_con.clone();
 
@@ -35,6 +31,6 @@ async fn get_job_status(
     Ok(Json(status))
 }
 
-pub fn job_routes() -> Router<Arc<AppState>>{
+pub fn job_routes() -> Router<Arc<AppState>> {
     Router::new().route("/{id}/status", get(get_job_status))
 }

@@ -1,4 +1,4 @@
-use std::{sync::Arc};
+use std::sync::Arc;
 
 use axum::{
     Json, Router,
@@ -11,17 +11,12 @@ use reqwest::StatusCode;
 use serde_json::json;
 use uuid::Uuid;
 
-
-use crate::models::{
-    dto::{BotInfo, BotSummary, NewBotRequest},
-};
+use crate::extract::SessionUser;
+use crate::models::dto::{BotInfo, BotSummary, NewBotRequest};
 use crate::state::AppState;
 use crate::{
     error::{AppError, AppResult},
     models::dto::{Job, ValidationStatus},
-};
-use crate::{
-    extract::SessionUser,
 };
 
 const MIN_NAME_LEN: usize = 5;
@@ -202,8 +197,6 @@ async fn validate_bot(
     Ok((StatusCode::ACCEPTED, Json(json!({"job_id": job_id}))).into_response())
 }
 
-
-
 // LEGACY, delete later
 // TODO replace both get_math_status and get_job_status with single function or think of better solution
 // async fn get_match_status(
@@ -224,17 +217,14 @@ async fn validate_bot(
 //     Ok(Json(status))
 // }
 
-
 // For now this allows only playing against system bots
 async fn get_system_bots(
     State(state): State<Arc<AppState>>,
-    session: SessionUser,
+    _session: SessionUser,
 ) -> AppResult<Json<Vec<BotSummary>>> {
     let system_bots: Vec<BotSummary> = sqlx::query_as!(BotSummary,r#"SELECT id as "id: uuid::Uuid", user_id as "owner_id: uuid::Uuid", name, description, is_active, is_public, is_valid, rating, total_matches FROM bots WHERE user_id is NULL"#).fetch_all(&state.sqlite_pool).await?;
     Ok(Json(system_bots))
 }
-
-
 
 pub fn bots_routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -245,8 +235,7 @@ pub fn bots_routes() -> Router<Arc<AppState>> {
         )
         .route("/{id}/validate", post(validate_bot))
         .route("/system-bots", get(get_system_bots))
-        //.route("/match/{match_id}/status", get(get_match_status))
-
+    //.route("/match/{match_id}/status", get(get_match_status))
 }
 
 // New routes for new feature
@@ -278,10 +267,14 @@ mod tests {
     #[test]
     fn accepts_valid_payload() {
         assert!(validate_payload(&req("TestBot", None, "# a valid python bot source\n")).is_ok());
-        assert!(validate_payload(
-            &req("TestBot", Some("desc"), "import chess\n\ndef get_chess_move(fen):\n    return 'e2e4'\n")
-        )
-        .is_ok());
+        assert!(
+            validate_payload(&req(
+                "TestBot",
+                Some("desc"),
+                "import chess\n\ndef get_chess_move(fen):\n    return 'e2e4'\n"
+            ))
+            .is_ok()
+        );
     }
 
     #[test]

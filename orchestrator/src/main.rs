@@ -93,8 +93,15 @@ async fn main() {
                         let pool_copy = db_pool.clone();
 
                         tokio::spawn(async move {
-                            play_match(&match_id, white_bot_id, black_bot_id, pool_copy, conn_copy, is_ranked)
-                                .await;
+                            play_match(
+                                &match_id,
+                                white_bot_id,
+                                black_bot_id,
+                                pool_copy,
+                                conn_copy,
+                                is_ranked,
+                            )
+                            .await;
                         });
                     }
                     _ => {

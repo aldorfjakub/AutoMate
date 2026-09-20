@@ -1,4 +1,4 @@
-pub mod dto;
-pub mod user;
 pub mod bot;
+pub mod dto;
 pub mod matches;
+pub mod user;

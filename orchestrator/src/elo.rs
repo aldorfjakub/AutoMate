@@ -47,10 +47,10 @@ mod tests {
     #[test]
     fn loss_losses_same_magnitude_as_win_gain() {
         let k = 40.0;
-        assert!((rating_delta(1000.0, 1000.0, 1.0, k)
-            + rating_delta(1000.0, 1000.0, 0.0, k))
-        .abs()
-            < 1e-9);
+        assert!(
+            (rating_delta(1000.0, 1000.0, 1.0, k) + rating_delta(1000.0, 1000.0, 0.0, k)).abs()
+                < 1e-9
+        );
     }
 
     #[test]

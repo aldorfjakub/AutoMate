@@ -1,10 +1,6 @@
 use std::{env, time::Duration};
 
-use crate::{
-    handlers::play::start_match,
-    models::dto::{BotSummary},
-    routes::app_routes,
-};
+use crate::{handlers::play::start_match, models::dto::BotSummary, routes::app_routes};
 use dotenvy::dotenv;
 use redis::{Client, aio::MultiplexedConnection};
 use sqlx::SqlitePool;
@@ -19,7 +15,6 @@ mod models;
 mod routes;
 mod state;
 mod system_bots;
-
 
 async fn schedule_match(
     db_pool: &SqlitePool,
@@ -59,7 +54,6 @@ async fn schedule_match(
     start_match(db_pool.clone(), redis_conn, bot, opponent, true)
         .await
         .map_err(|e| format!("{:?}", e))?;
-
 
     // TODO entry into redis
     Ok(())

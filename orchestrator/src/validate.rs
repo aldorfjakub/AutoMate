@@ -32,16 +32,24 @@ async fn fetch_bot_or_fail(
     match get_bot(db_pool, bot_id).await {
         Ok(Some(bot)) => Ok(bot),
         Ok(_) => {
-            publish_validation_status(redis_conn, job_id, ValidationStatus::Failed {
-                reason: "No such bot".to_string(),
-            })
+            publish_validation_status(
+                redis_conn,
+                job_id,
+                ValidationStatus::Failed {
+                    reason: "No such bot".to_string(),
+                },
+            )
             .await;
             Err(())
         }
         _ => {
-            publish_validation_status(redis_conn, job_id, ValidationStatus::Failed {
-                reason: "Internal error".to_string(),
-            })
+            publish_validation_status(
+                redis_conn,
+                job_id,
+                ValidationStatus::Failed {
+                    reason: "Internal error".to_string(),
+                },
+            )
             .await;
             Err(())
         }
@@ -56,8 +64,7 @@ pub async fn validate_bot(
 ) {
     publish_validation_status(&mut redis_conn, &job_id, ValidationStatus::Running).await;
 
-    let bot = match fetch_bot_or_fail(&mut redis_conn, &job_id, &db_pool, bot_id).await
-    {
+    let bot = match fetch_bot_or_fail(&mut redis_conn, &job_id, &db_pool, bot_id).await {
         Ok(bot) => bot,
         Err(_) => return,
     };

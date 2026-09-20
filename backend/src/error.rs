@@ -58,7 +58,9 @@ impl IntoResponse for AppError {
                 eprintln!("missing env: {e}");
                 "server misconfiguration".to_string()
             }
-            AppError::BadRequest(m) | AppError::Conflict(m) | AppError::Internal(m) => m.to_string(),
+            AppError::BadRequest(m) | AppError::Conflict(m) | AppError::Internal(m) => {
+                m.to_string()
+            }
             AppError::Unauthorized => "unauthorized".to_string(),
             AppError::NotFound => "not found".to_string(),
         };

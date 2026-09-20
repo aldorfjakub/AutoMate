@@ -4,7 +4,7 @@ use axum::{
     Json, Router,
     extract::{Path, State},
     response::IntoResponse,
-    routing::{get, post},
+    routing::get,
 };
 
 use uuid::Uuid;
@@ -112,7 +112,7 @@ async fn get_ranked_match(State(state): State<Arc<AppState>>) -> AppResult<impl 
 async fn get_match_result(
     State(state): State<Arc<AppState>>,
     Path(match_id): Path<Uuid>,
-    session: SessionUser,
+    _session: SessionUser,
 ) -> AppResult<Json<Match>> {
     let m = sqlx::query_as!(
         Match,

@@ -1,4 +1,3 @@
-
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::SqlitePool;
 use uuid::Uuid;
@@ -37,7 +36,7 @@ pub struct BotInfo {
     pub is_public: bool,
     pub is_valid: bool,
     pub rating: f64,
-    pub total_matches: i64
+    pub total_matches: i64,
 }
 
 pub async fn get_bot(pool: &SqlitePool, id: Uuid) -> Result<Option<BotInfo>, sqlx::Error> {
@@ -76,7 +75,11 @@ pub enum MatchEvent {
 
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "lowercase")]
-pub enum Outcome { White, Black, Draw }
+pub enum Outcome {
+    White,
+    Black,
+    Draw,
+}
 
 impl Outcome {
     pub const fn as_str(&self) -> &'static str {
